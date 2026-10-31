@@ -1,0 +1,24 @@
+# Dependencias
+node_modules/
+
+# Build estático
+dist/
+
+# Cachés
+.vite/
+node_modules/.vite/
+coverage/
+
+# Entorno y secretos
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+npm-debug.log*
+
+# Sistema
+.DS_Store
+Thumbs.db
+desktop.ini
