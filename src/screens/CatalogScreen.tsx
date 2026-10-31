@@ -35,6 +35,7 @@ export function CatalogScreen({ profile, onHost, onJoin, onEditProfile }: Props)
       <ul className="game-grid">
         {games.map((game) => (
           <li key={game.id} className="card game-card">
+            <div className="game-cover" aria-hidden="true" />
             <h2>{game.name}</h2>
             <p className="muted">{game.description}</p>
             <p className="badge">

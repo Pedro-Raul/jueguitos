@@ -33,7 +33,7 @@ export function RoomView({ room, me, isHost, error, notice, onStart, onLeave, di
   }
 
   return (
-    <main className="screen">
+    <main className={room.status === 'playing' ? 'screen screen-game' : 'screen'}>
       <header className="topbar">
         <div>
           <span className="muted small">Sala</span>{' '}
@@ -47,7 +47,7 @@ export function RoomView({ room, me, isHost, error, notice, onStart, onLeave, di
       {error ? <p className="alert">{error}</p> : null}
       {notice ? <p className="alert">{notice}</p> : null}
 
-      <section className="card room-code-card">
+      <section className="card room-ticket">
         <span className="muted small">Comparte este código</span>
         <strong>{room.code}</strong>
         <button className="primary" type="button" onClick={copyCode}>
@@ -103,7 +103,7 @@ export function RoomView({ room, me, isHost, error, notice, onStart, onLeave, di
           )}
         </section>
       ) : (
-        <section className="card">
+        <section className="game-stage">
           {game ? (
             <game.View state={room.state} me={me} players={room.players} dispatch={dispatch} />
           ) : (

@@ -469,6 +469,26 @@ function BoardCell({
   )
 }
 
+const PIPS: Record<number, number[]> = {
+  1: [4],
+  2: [0, 8],
+  3: [0, 4, 8],
+  4: [0, 2, 6, 8],
+  5: [0, 2, 4, 6, 8],
+  6: [0, 2, 3, 5, 6, 8],
+}
+
+function Die({ value }: { value: number }) {
+  const on = PIPS[value] ?? []
+  return (
+    <span className="cp-die" role="img" aria-label={`Dado ${value}`}>
+      {Array.from({ length: 9 }, (_, index) => (
+        <i key={index} className={on.includes(index) ? 'is-on' : ''} />
+      ))}
+    </span>
+  )
+}
+
 export function CucupolyView({ state, me, players, dispatch }: GameViewProps<CucupolyState>) {
   const current = state.order[state.currentIndex]
   const activeCount = state.order.filter((id) => !state.bankrupt.includes(id)).length
@@ -483,34 +503,8 @@ export function CucupolyView({ state, me, players, dispatch }: GameViewProps<Cuc
 
   return (
     <div className="cp">
-      <div className="cp-board-wrap">
-        <div className="cp-board">
-          {BOARD.map((tile) => (
-            <BoardCell key={tile.index} tile={tile} state={state} players={players} />
-          ))}
-
-          <div className="cp-center">
-            <span className="cp-eyebrow">Turno {state.turnNumber + 1}</span>
-            <strong className="cp-current">{nameOf(state, current)}</strong>
-            <p className="cp-hint">{phaseHint(state)}</p>
-            {state.dice ? (
-              <p className="cp-dice">
-                {state.dice.values.join(' · ')} = <strong>{state.dice.total}</strong>
-              </p>
-            ) : null}
-            {modifier ? <p className="cp-hint">Esta ronda: {modifier.dice} dado(s)</p> : null}
-            <ul className="cp-mini-log">
-              {state.log.slice(-4).reverse().map((entry, index) => (
-                <li key={`${entry.turn}-${index}`}>{entry.text}</li>
-              ))}
-            </ul>
-          </div>
-        </div>
-      </div>
-
-      <aside className="cp-panel">
-        <section className="cp-box">
-          <h3>Jugadores</h3>
+      <header className="cp-hud">
+        <div className="cp-hud-players">
           <ul className="cp-players">
             {state.order.map((id) => {
               const player = players.find((candidate) => candidate.id === id)
@@ -532,82 +526,118 @@ export function CucupolyView({ state, me, players, dispatch }: GameViewProps<Cuc
               )
             })}
           </ul>
-        </section>
+        </div>
+        <div className="cp-hud-turn">
+          <span className="cp-eyebrow">Turno {state.turnNumber + 1}</span>
+          <strong className="cp-current">{nameOf(state, current)}</strong>
+          {modifier ? <span className="cp-badge">🎲 {modifier.dice} dado(s)</span> : null}
+        </div>
+      </header>
 
-        <section className="cp-box">
-          <h3>Mis propiedades</h3>
-          {myTiles.length === 0 ? (
-            <p className="muted small">Aún no tienes casillas.</p>
-          ) : (
-            <ul className="cp-chips">
-              {myTiles.map((tile) => (
-                <li key={tile.index} className="cp-chip">
-                  {tile.name}
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
+      <div className="cp-layout">
+        <div className="cp-board-wrap">
+          <div className="cp-board">
+            {BOARD.map((tile) => (
+              <BoardCell key={tile.index} tile={tile} state={state} players={players} />
+            ))}
 
-        <section className="cp-box">
-          <h3>Habilidades</h3>
-          {services.length === 0 ? (
-            <p className="muted small">Necesitas un servicio para usar habilidades.</p>
-          ) : (
-            services.map((tile) => {
-              const ability = state.abilities[tile.index]
-              const active =
-                state.turnNumber >= ability.from && state.turnNumber < ability.until
-              const remaining = Math.max(
-                0,
-                Math.ceil((ability.readyAt - state.turnNumber) / Math.max(1, activeCount)),
-              )
-              const ready = !active && remaining === 0
-
-              return (
-                <div key={tile.index} className="cp-ability">
-                  <div>
-                    <strong>{tile.name}</strong>
-                    <span className="muted small">{abilityLabel(tile)}</span>
-                  </div>
-                  <span className="cp-ability-state">
-                    {active ? 'activa' : ready ? 'lista' : `espera ${remaining} r.`}
-                  </span>
-                  <button
-                    className="ghost small-btn"
-                    type="button"
-                    disabled={!ready || state.phase !== 'waiting-roll' || current !== me.id}
-                    onClick={() =>
-                      dispatch({ type: 'activate-ability', payload: { tileId: tile.index } })
-                    }
-                  >
-                    Activar
-                  </button>
+            <div className="cp-center">
+              <span className="cp-eyebrow">Turno {state.turnNumber + 1}</span>
+              <strong className="cp-current">{nameOf(state, current)}</strong>
+              <p className="cp-hint">{phaseHint(state)}</p>
+              {state.dice ? (
+                <div className="cp-dice">
+                  {state.dice.values.map((value, index) => (
+                    <Die key={index} value={value} />
+                  ))}
+                  <span className="cp-dice-total">= {state.dice.total}</span>
                 </div>
-              )
-            })
-          )}
-        </section>
+              ) : null}
+              {modifier ? <span className="cp-badge">Esta ronda: {modifier.dice} dado(s)</span> : null}
+              <ul className="cp-mini-log">
+                {state.log.slice(-4).reverse().map((entry, index) => (
+                  <li key={`${entry.turn}-${index}`}>{entry.text}</li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        </div>
 
-        <section className="cp-box">
-          <h3>Acciones</h3>
+        <div className="cp-dock">
           <ActionPanel state={state} me={me} dispatch={dispatch} />
-        </section>
+        </div>
 
-        <section className="cp-box">
-          <h3>Registro</h3>
-          <ul className="cp-log">
-            {state.log
-              .slice(-10)
-              .reverse()
-              .map((entry, index) => (
-                <li key={`${entry.turn}-${index}`}>
-                  <span className="muted small">T{entry.turn + 1}</span> {entry.text}
-                </li>
-              ))}
-          </ul>
-        </section>
-      </aside>
+        <aside className="cp-rail">
+          <section className="cp-box">
+            <h3>Mis propiedades</h3>
+            {myTiles.length === 0 ? (
+              <p className="muted small">Aún no tienes casillas.</p>
+            ) : (
+              <ul className="cp-chips">
+                {myTiles.map((tile) => (
+                  <li key={tile.index} className="cp-chip">
+                    {tile.name}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+
+          <section className="cp-box">
+            <h3>Habilidades</h3>
+            {services.length === 0 ? (
+              <p className="muted small">Necesitas un servicio para usar habilidades.</p>
+            ) : (
+              services.map((tile) => {
+                const ability = state.abilities[tile.index]
+                const active =
+                  state.turnNumber >= ability.from && state.turnNumber < ability.until
+                const remaining = Math.max(
+                  0,
+                  Math.ceil((ability.readyAt - state.turnNumber) / Math.max(1, activeCount)),
+                )
+                const ready = !active && remaining === 0
+
+                return (
+                  <div key={tile.index} className="cp-ability">
+                    <div>
+                      <strong>{tile.name}</strong>
+                      <span className="muted small">{abilityLabel(tile)}</span>
+                    </div>
+                    <span className="cp-ability-state">
+                      {active ? 'activa' : ready ? 'lista' : `espera ${remaining} r.`}
+                    </span>
+                    <button
+                      className="ghost small-btn"
+                      type="button"
+                      disabled={!ready || state.phase !== 'waiting-roll' || current !== me.id}
+                      onClick={() =>
+                        dispatch({ type: 'activate-ability', payload: { tileId: tile.index } })
+                      }
+                    >
+                      Activar
+                    </button>
+                  </div>
+                )
+              })
+            )}
+          </section>
+
+          <section className="cp-box">
+            <h3>Registro</h3>
+            <ul className="cp-log">
+              {state.log
+                .slice(-10)
+                .reverse()
+                .map((entry, index) => (
+                  <li key={`${entry.turn}-${index}`}>
+                    <span className="muted small">T{entry.turn + 1}</span> {entry.text}
+                  </li>
+                ))}
+            </ul>
+          </section>
+        </aside>
+      </div>
     </div>
   )
 }
