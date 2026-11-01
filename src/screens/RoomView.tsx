@@ -32,8 +32,25 @@ export function RoomView({ room, me, isHost, error, notice, onStart, onLeave, di
     }
   }
 
+  if (room.status === 'playing') {
+    return (
+      <main className="game-full">
+        {error ? <p className="alert game-alert">{error}</p> : null}
+        {notice ? <p className="alert game-alert">{notice}</p> : null}
+        {game ? (
+          <game.View state={room.state} me={me} players={room.players} dispatch={dispatch} />
+        ) : (
+          <p className="alert game-alert">El juego de esta sala ya no está disponible.</p>
+        )}
+        <button className="ghost game-exit" type="button" onClick={onLeave}>
+          Salir
+        </button>
+      </main>
+    )
+  }
+
   return (
-    <main className={room.status === 'playing' ? 'screen screen-game' : 'screen'}>
+    <main className="screen">
       <header className="topbar">
         <div>
           <span className="muted small">Sala</span>{' '}
@@ -78,39 +95,29 @@ export function RoomView({ room, me, isHost, error, notice, onStart, onLeave, di
         </ul>
       </section>
 
-      {room.status === 'lobby' ? (
-        <section className="card">
-          {isHost ? (
-            <>
-              <button
-                className="primary"
-                type="button"
-                onClick={onStart}
-                disabled={connectedCount < room.minPlayers}
-              >
-                Iniciar partida
-              </button>
-              {connectedCount < room.minPlayers ? (
-                <p className="muted small">
-                  Hacen falta al menos {room.minPlayers} jugador(es) conectado(s).
-                </p>
-              ) : (
-                <p className="muted small">Empieza cuando estéis todos. La sala se puede unir por código.</p>
-              )}
-            </>
-          ) : (
-            <p className="muted">Esperando a que el anfitrión inicie la partida…</p>
-          )}
-        </section>
-      ) : (
-        <section className="game-stage">
-          {game ? (
-            <game.View state={room.state} me={me} players={room.players} dispatch={dispatch} />
-          ) : (
-            <p className="alert">El juego de esta sala ya no está disponible.</p>
-          )}
-        </section>
-      )}
+      <section className="card">
+        {isHost ? (
+          <>
+            <button
+              className="primary"
+              type="button"
+              onClick={onStart}
+              disabled={connectedCount < room.minPlayers}
+            >
+              Iniciar partida
+            </button>
+            {connectedCount < room.minPlayers ? (
+              <p className="muted small">
+                Hacen falta al menos {room.minPlayers} jugador(es) conectado(s).
+              </p>
+            ) : (
+              <p className="muted small">Empieza cuando estéis todos. La sala se puede unir por código.</p>
+            )}
+          </>
+        ) : (
+          <p className="muted">Esperando a que el anfitrión inicie la partida…</p>
+        )}
+      </section>
     </main>
   )
 }

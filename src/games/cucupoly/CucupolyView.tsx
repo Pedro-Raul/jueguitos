@@ -1,8 +1,19 @@
-import { useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { GameAction, GameViewProps, Player } from '../../types'
-import { BOARD, gridPosition, type Tile } from './board'
-import type { CucupolyState, TradeState } from './engine'
+import { BOARD } from './board'
+import { rentFor, type CucupolyState, type TradeState } from './engine'
+import { latestRoll, rollKey, type RollHint } from './rollHint'
+import { DICE_SECONDS } from './three/layout'
 import { RULES } from './rules.config'
+import {
+  groupNameFor,
+  isPurchasable,
+  tileColor,
+  tileIcon,
+  tileTextColor,
+} from './visual'
+
+const BoardScene = lazy(() => import('./three/BoardScene'))
 
 function money(value: number): string {
   return `$${value}`
@@ -35,16 +46,66 @@ function phaseHint(state: CucupolyState): string {
   }
 }
 
-function abilityLabel(tile: Tile): string {
-  switch (tile.service) {
-    case 'water':
-      return 'Abastecimiento: +15% a tus rentas'
-    case 'electricity':
-      return 'Apagón: nadie puede comprar'
-    case 'telephone':
-      return 'Caída de red: puedes vetar tratos'
+/** ¿Hay una decisión pendiente que solo puede resolver `meId`? */
+function mustAct(state: CucupolyState, meId: string): boolean {
+  if (state.phase === 'finished') return false
+  const isMyTurn = state.order[state.currentIndex] === meId
+  switch (state.phase) {
+    case 'auction':
+      return state.auction?.pending.includes(meId) ?? false
+    case 'buy-decision':
+    case 'bus-move':
+    case 'waiting-roll':
+      return isMyTurn
+    case 'thirty-one': {
+      const table = state.table31
+      if (!table) return false
+      return table.stage === 'bets'
+        ? table.pendingBets.includes(meId)
+        : table.drawOrder[table.drawIndex] === meId
+    }
+    case 'trade': {
+      const trade = state.trade
+      if (!trade) return false
+      if (trade.stage === 'veto') return trade.vetoer === meId
+      return trade.to === meId || trade.from === meId
+    }
     default:
-      return ''
+      return isMyTurn
+  }
+}
+
+function actionIcon(state: CucupolyState): string {
+  switch (state.phase) {
+    case 'buy-decision':
+      return '🏷️'
+    case 'auction':
+      return '🔨'
+    case 'thirty-one':
+      return '🃏'
+    case 'trade':
+      return '🤝'
+    case 'bus-move':
+      return '🚌'
+    default:
+      return '🎲'
+  }
+}
+
+function actionTitle(state: CucupolyState, me: Player): string {
+  switch (state.phase) {
+    case 'buy-decision':
+      return 'Comprar o subastar'
+    case 'auction':
+      return 'Subasta'
+    case 'thirty-one':
+      return 'Mesa de 31'
+    case 'trade':
+      return 'Trato'
+    case 'bus-move':
+      return 'Parada de busetas'
+    default:
+      return `Tu turno, ${nameOf(state, me.id)}`
   }
 }
 
@@ -422,78 +483,94 @@ function ActionPanel({ state, me, dispatch }: PanelProps) {
   )
 }
 
-function BoardCell({
-  tile,
+function TileSheet({
+  index,
   state,
   players,
+  onClose,
 }: {
-  tile: Tile
+  index: number
   state: CucupolyState
   players: Player[]
+  onClose: () => void
 }) {
-  const { column, row } = gridPosition(tile.index)
-  const owner = state.owners[tile.index]
-  const ownerPlayer = players.find((player) => player.id === owner)
-  const occupants = players.filter(
-    (player) =>
-      !state.bankrupt.includes(player.id) && state.positions[player.id] === tile.index,
-  )
-  const isCorner = tile.index === 0 || tile.index === 12 || tile.index === 24 || tile.index === 36
+  const tile = BOARD[index]
+  const ownerId = state.owners[index] ?? null
+  const owner = ownerId ? players.find((player) => player.id === ownerId) : undefined
+  const rent = ownerId && isPurchasable(tile) ? rentFor(state, index, state.dice?.total ?? 7) : null
 
   return (
-    <div
-      className={`cp-cell cp-cell-${tile.type}${isCorner ? ' cp-corner' : ''}`}
-      style={{
-        gridColumn: column,
-        gridRow: row,
-        borderTopColor: ownerPlayer?.color ?? 'transparent',
-      }}
-      title={`${tile.index}. ${tile.name}`}
-    >
-      <span className="cp-name">{tile.name}</span>
-      {tile.price !== undefined ? <span className="cp-price">${tile.price}</span> : null}
-      {tile.tax !== undefined ? <span className="cp-price">${tile.tax}</span> : null}
-      <span className="cp-tokens">
-        {occupants.map((player) => (
-          <span
-            key={player.id}
-            className="cp-token"
-            style={{ backgroundColor: player.color }}
-            title={player.name}
-          >
-            {player.emoji}
+    <div className="cp-sheet-backdrop" role="presentation" onClick={onClose}>
+      <section
+        className="cp-sheet"
+        role="dialog"
+        aria-modal="true"
+        aria-label={tile.name}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <header className="cp-sheet-head" style={{ background: tileColor(tile), color: tileTextColor(tile) }}>
+          <span className="cp-sheet-icon" aria-hidden="true">
+            {tileIcon(tile) ?? '🏠'}
           </span>
-        ))}
-      </span>
+          <div>
+            <span className="cp-sheet-index">Casilla {index}</span>
+            <h2>{tile.name}</h2>
+          </div>
+        </header>
+
+        <dl className="cp-sheet-facts">
+          <div>
+            <dt>Grupo</dt>
+            <dd>{groupNameFor(tile)}</dd>
+          </div>
+          {tile.price !== undefined ? (
+            <div>
+              <dt>Precio</dt>
+              <dd>{money(tile.price)}</dd>
+            </div>
+          ) : null}
+          {rent !== null ? (
+            <div>
+              <dt>Renta</dt>
+              <dd>{money(rent)}</dd>
+            </div>
+          ) : null}
+          {tile.tax !== undefined ? (
+            <div>
+              <dt>Impuesto</dt>
+              <dd>{money(tile.tax)}</dd>
+            </div>
+          ) : null}
+          <div>
+            <dt>Dueño</dt>
+            <dd>
+              {owner
+                ? `${owner.emoji} ${owner.name}`
+                : isPurchasable(tile)
+                  ? 'Sin dueño'
+                  : '—'}
+            </dd>
+          </div>
+        </dl>
+
+        <button className="primary" type="button" onClick={onClose}>
+          Cerrar
+        </button>
+      </section>
     </div>
   )
 }
 
-const PIPS: Record<number, number[]> = {
-  1: [4],
-  2: [0, 8],
-  3: [0, 4, 8],
-  4: [0, 2, 6, 8],
-  5: [0, 2, 4, 6, 8],
-  6: [0, 2, 3, 5, 6, 8],
-}
-
-function Die({ value }: { value: number }) {
-  const on = PIPS[value] ?? []
-  return (
-    <span className="cp-die" role="img" aria-label={`Dado ${value}`}>
-      {Array.from({ length: 9 }, (_, index) => (
-        <i key={index} className={on.includes(index) ? 'is-on' : ''} />
-      ))}
-    </span>
-  )
-}
-
 export function CucupolyView({ state, me, players, dispatch }: GameViewProps<CucupolyState>) {
+  const [selected, setSelected] = useState<number | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [play, setPlay] = useState<{ hint: RollHint; seq: number } | null>(null)
+  const [diceBlocked, setDiceBlocked] = useState(false)
+  const [banner, setBanner] = useState<string | null>(null)
+  const seenRoll = useRef<string | null>(null)
+  const firstRoll = useRef(true)
+
   const current = state.order[state.currentIndex]
-  const activeCount = state.order.filter((id) => !state.bankrupt.includes(id)).length
-  const myTiles = BOARD.filter((tile) => state.owners[tile.index] === me.id)
-  const services = BOARD.filter((tile) => tile.type === 'service' && state.owners[tile.index] === me.id)
   const modifier =
     state.diceModifier &&
     state.turnNumber >= state.diceModifier.from &&
@@ -501,143 +578,152 @@ export function CucupolyView({ state, me, players, dispatch }: GameViewProps<Cuc
       ? state.diceModifier
       : null
 
+  const handleSelect = useCallback((index: number) => setSelected(index), [])
+  const handleBusy = useCallback((value: boolean) => setBusy(value), [])
+
+  const hint = useMemo(() => latestRoll(state), [state])
+
+  // Detección sincrónica durante el render: al llegar un snapshot con una
+  // tirada nueva, el bloqueo de dados queda activo en esta misma pasada,
+  // así las fichas esperan sin carreras de estados.
+  if (hint && rollKey(hint) !== seenRoll.current) {
+    seenRoll.current = rollKey(hint)
+    if (firstRoll.current) {
+      // Reconexión o entrada tarde: baseline sin animación.
+      firstRoll.current = false
+    } else {
+      setPlay({ hint, seq: (play?.seq ?? 0) + 1 })
+      setDiceBlocked(true)
+    }
+  }
+
+  // Orden dados → ficha → botones: 1.2 s de dados, banner central 2 s.
+  useEffect(() => {
+    if (!play) return
+    const text =
+      play.hint.values.length > 1
+        ? `${play.hint.values.join(' + ')} = ${play.hint.total}`
+        : `${play.hint.total}`
+    const diceMs = DICE_SECONDS * 1000
+    const settle = window.setTimeout(() => {
+      setDiceBlocked(false)
+      setBanner(text)
+    }, diceMs)
+    const hide = window.setTimeout(() => setBanner(null), diceMs + 2000)
+    return () => {
+      window.clearTimeout(settle)
+      window.clearTimeout(hide)
+      setBanner(null)
+    }
+  }, [play])
+
+  const roll = play ? { ...play.hint, seq: play.seq } : null
+  const locked = diceBlocked || busy
+  const acting = mustAct(state, me.id)
+
   return (
-    <div className="cp">
+    <div className="cp-stage">
+      <div className="cp-canvas">
+        <Suspense fallback={<div className="cp-loading">Cargando tablero 3D…</div>}>
+          <BoardScene
+            state={state}
+            players={players}
+            roll={roll}
+            tokenGate={!diceBlocked}
+            onSelectTile={handleSelect}
+            onBusyChange={handleBusy}
+          />
+        </Suspense>
+      </div>
+
+      {banner ? (
+        <div className="cp-dice-banner" aria-live="polite">
+          {banner}
+        </div>
+      ) : null}
+
+      {state.phase === 'finished' ? (
+        <div className="cp-winner" role="status">
+          <span className="cp-winner-emoji" aria-hidden="true">
+            🏆
+          </span>
+          <p>¡Gana {nameOf(state, state.winner)}!</p>
+        </div>
+      ) : null}
+
       <header className="cp-hud">
         <div className="cp-hud-players">
-          <ul className="cp-players">
-            {state.order.map((id) => {
-              const player = players.find((candidate) => candidate.id === id)
-              const out = state.bankrupt.includes(id)
-              return (
-                <li
-                  key={id}
-                  className={`cp-player${out ? ' is-out' : ''}${id === current ? ' is-current' : ''}`}
-                >
-                  <span className="cp-dot" style={{ backgroundColor: player?.color ?? '#999' }} />
-                  <span className="cp-player-name">
+          {state.order.map((id) => {
+            const player = players.find((candidate) => candidate.id === id)
+            const out = state.bankrupt.includes(id)
+            return (
+              <article
+                key={id}
+                className={`cp-pcard${id === current ? ' is-current' : ''}${out ? ' is-out' : ''}`}
+              >
+                <span className="avatar" style={{ backgroundColor: player?.color ?? '#999' }}>
+                  {player?.emoji ?? '🙂'}
+                </span>
+                <div className="cp-pinfo">
+                  <span className="cp-pname">
                     {nameOf(state, id)}
                     {id === me.id ? ' (tú)' : ''}
                   </span>
-                  <span className="cp-player-money">
+                  <span className="cp-pmoney">
                     {out ? 'eliminado' : money(state.money[id] ?? 0)}
                   </span>
-                </li>
-              )
-            })}
-          </ul>
-        </div>
-        <div className="cp-hud-turn">
-          <span className="cp-eyebrow">Turno {state.turnNumber + 1}</span>
-          <strong className="cp-current">{nameOf(state, current)}</strong>
-          {modifier ? <span className="cp-badge">🎲 {modifier.dice} dado(s)</span> : null}
+                </div>
+              </article>
+            )
+          })}
         </div>
       </header>
 
-      <div className="cp-layout">
-        <div className="cp-board-wrap">
-          <div className="cp-board">
-            {BOARD.map((tile) => (
-              <BoardCell key={tile.index} tile={tile} state={state} players={players} />
-            ))}
-
-            <div className="cp-center">
-              <span className="cp-eyebrow">Turno {state.turnNumber + 1}</span>
-              <strong className="cp-current">{nameOf(state, current)}</strong>
-              <p className="cp-hint">{phaseHint(state)}</p>
-              {state.dice ? (
-                <div className="cp-dice">
-                  {state.dice.values.map((value, index) => (
-                    <Die key={index} value={value} />
-                  ))}
-                  <span className="cp-dice-total">= {state.dice.total}</span>
-                </div>
-              ) : null}
-              {modifier ? <span className="cp-badge">Esta ronda: {modifier.dice} dado(s)</span> : null}
-              <ul className="cp-mini-log">
-                {state.log.slice(-4).reverse().map((entry, index) => (
-                  <li key={`${entry.turn}-${index}`}>{entry.text}</li>
-                ))}
-              </ul>
-            </div>
-          </div>
-        </div>
-
-        <div className="cp-dock">
-          <ActionPanel state={state} me={me} dispatch={dispatch} />
-        </div>
-
-        <aside className="cp-rail">
-          <section className="cp-box">
-            <h3>Mis propiedades</h3>
-            {myTiles.length === 0 ? (
-              <p className="muted small">Aún no tienes casillas.</p>
-            ) : (
-              <ul className="cp-chips">
-                {myTiles.map((tile) => (
-                  <li key={tile.index} className="cp-chip">
-                    {tile.name}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </section>
-
-          <section className="cp-box">
-            <h3>Habilidades</h3>
-            {services.length === 0 ? (
-              <p className="muted small">Necesitas un servicio para usar habilidades.</p>
-            ) : (
-              services.map((tile) => {
-                const ability = state.abilities[tile.index]
-                const active =
-                  state.turnNumber >= ability.from && state.turnNumber < ability.until
-                const remaining = Math.max(
-                  0,
-                  Math.ceil((ability.readyAt - state.turnNumber) / Math.max(1, activeCount)),
-                )
-                const ready = !active && remaining === 0
-
-                return (
-                  <div key={tile.index} className="cp-ability">
-                    <div>
-                      <strong>{tile.name}</strong>
-                      <span className="muted small">{abilityLabel(tile)}</span>
-                    </div>
-                    <span className="cp-ability-state">
-                      {active ? 'activa' : ready ? 'lista' : `espera ${remaining} r.`}
-                    </span>
-                    <button
-                      className="ghost small-btn"
-                      type="button"
-                      disabled={!ready || state.phase !== 'waiting-roll' || current !== me.id}
-                      onClick={() =>
-                        dispatch({ type: 'activate-ability', payload: { tileId: tile.index } })
-                      }
-                    >
-                      Activar
-                    </button>
-                  </div>
-                )
-              })
-            )}
-          </section>
-
-          <section className="cp-box">
-            <h3>Registro</h3>
-            <ul className="cp-log">
-              {state.log
-                .slice(-10)
-                .reverse()
-                .map((entry, index) => (
-                  <li key={`${entry.turn}-${index}`}>
-                    <span className="muted small">T{entry.turn + 1}</span> {entry.text}
-                  </li>
-                ))}
-            </ul>
-          </section>
-        </aside>
+      <div className="cp-turnbanner" role="status">
+        <span className="cp-eyebrow">Turno {state.turnNumber + 1}</span>
+        <strong>{nameOf(state, current)}</strong>
+        <span className="cp-phase">{phaseHint(state)}</span>
+        {modifier ? <span className="cp-badge">🎲 {modifier.dice} dado(s)</span> : null}
       </div>
+
+      {!acting && state.phase !== 'finished' ? (
+        <div className="cp-dock" role="status">
+          {phaseHint(state)}
+        </div>
+      ) : null}
+
+      {acting ? (
+        <div className="cp-action-backdrop">
+          <section
+            className="cp-action-card"
+            role="dialog"
+            aria-modal="true"
+            aria-label={actionTitle(state, me)}
+          >
+            <header className="cp-action-head">
+              <span className="cp-action-icon" aria-hidden="true">
+                {actionIcon(state)}
+              </span>
+              <div>
+                <span className="cp-eyebrow">Turno {state.turnNumber + 1}</span>
+                <h2>{actionTitle(state, me)}</h2>
+              </div>
+            </header>
+            <fieldset className="cp-lock" disabled={locked}>
+              <ActionPanel state={state} me={me} dispatch={dispatch} />
+            </fieldset>
+          </section>
+        </div>
+      ) : null}
+
+      {selected !== null ? (
+        <TileSheet
+          index={selected}
+          state={state}
+          players={players}
+          onClose={() => setSelected(null)}
+        />
+      ) : null}
     </div>
   )
 }

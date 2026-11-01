@@ -3,7 +3,7 @@ import type { Profile } from './types'
 const STORAGE_KEY = 'jueguitos.profile'
 
 export const AVATAR_EMOJIS = [
-  '🐶', '🐱', '🦊', '🐼', '🐸', '🐵', '🦁', '🐯',
+  '🐶', '🐱', '🦊', '🐼', '🐧', '🐸', '🐵', '🦁', '🐯',
   '🐨', '🐙', '🦄', '🐝', '🦉', '🐢', '🐳', '🦖',
 ]
 
