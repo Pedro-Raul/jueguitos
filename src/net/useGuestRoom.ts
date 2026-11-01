@@ -16,6 +16,8 @@ export type GuestRoom = {
 }
 
 const MAX_RETRIES = 3
+/** Si un intento no abre la DataConnection en este plazo, se reintenta. */
+const CONNECT_TIMEOUT_MS = 10000
 
 /**
  * Seat identity is per tab (sessionStorage), not the localStorage profile id.
@@ -62,14 +64,32 @@ export function useGuestRoom(code: string, profile: Profile): GuestRoom {
     let cancelled = false
     let attempts = 0
     let retryTimer: number | undefined
+    let connTimer: number | undefined
     let retryScheduled = false
     let everConnected = false
-    let lastRejection: string | null = null
+    /** Último fallo visto: 'unavailable' (sala no encontrada) o 'network' (WebRTC/red). */
+    let lastFailure: 'unavailable' | 'network' | null = null
 
-    const peer = new Peer()
+    // STUN público (sin claves) para atravesar NATs de redes distintas.
+    const peer = new Peer({
+      config: {
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:global.stun.twilio.com:3478' },
+        ],
+      },
+    })
+
+    const clearConnTimer = () => {
+      if (connTimer !== undefined) {
+        window.clearTimeout(connTimer)
+        connTimer = undefined
+      }
+    }
 
     const closeWith = (text: string) => {
       if (cancelled) return
+      clearConnTimer()
       setStatus('closed')
       setMessage(text)
     }
@@ -82,10 +102,11 @@ export function useGuestRoom(code: string, profile: Profile): GuestRoom {
 
       if (attempts > MAX_RETRIES) {
         closeWith(
-          lastRejection ??
-            (everConnected
+          lastFailure === 'unavailable'
+            ? 'No se encontró la sala. Revisa el código y que el anfitrión siga conectado.'
+            : everConnected
               ? 'El anfitrión cerró la sala o se perdió la conexión.'
-              : 'No se encontró la sala. Revisa el código y que el anfitrión siga conectado.'),
+              : 'No se pudo iniciar la conexión con el anfitrión. Revisa tu red (los datos móviles a veces bloquean el juego); probar con la misma Wi-Fi ayuda.',
         )
         return
       }
@@ -102,14 +123,17 @@ export function useGuestRoom(code: string, profile: Profile): GuestRoom {
 
     const connect = () => {
       if (cancelled) return
+      clearConnTimer()
       const conn = peer.connect(peerIdFor(code), { reliable: true })
       connRef.current = conn
 
       conn.on('open', () => {
         if (cancelled) return
+        clearConnTimer()
         everConnected = true
         attempts = 0
         retryScheduled = false
+        lastFailure = null
         setStatus('connected')
         setMessage(null)
         const hello: GuestMessage = { kind: 'hello', profile, seatId }
@@ -124,7 +148,6 @@ export function useGuestRoom(code: string, profile: Profile): GuestRoom {
           setStatus('connected')
           setMessage(null)
         } else if (incoming.kind === 'rejected') {
-          lastRejection = incoming.message
           setMessage(incoming.message)
         } else if (incoming.kind === 'closed') {
           closeWith(incoming.message)
@@ -132,24 +155,55 @@ export function useGuestRoom(code: string, profile: Profile): GuestRoom {
       })
 
       conn.on('close', () => {
+        clearConnTimer()
         if (cancelled || statusRef.current === 'closed') return
         scheduleRetry()
       })
+
+      conn.on('error', () => {
+        clearConnTimer()
+        if (cancelled || statusRef.current === 'closed') return
+        lastFailure = 'network'
+        scheduleRetry()
+      })
+
+      // Sin este plazo, un ICE atascado (NAT de datos móviles) cuelga el intento para siempre.
+      connTimer = window.setTimeout(() => {
+        connTimer = undefined
+        if (cancelled || conn.open) return
+        lastFailure = 'network'
+        try {
+          conn.close()
+        } catch {
+          /* la conexión ya estaba muerta */
+        }
+        scheduleRetry()
+      }, CONNECT_TIMEOUT_MS)
     }
 
     peer.on('open', () => {
       if (!cancelled) connect()
     })
 
+    // Si el socket de señalización se cae antes de hablar con el anfitrión, se rearma.
+    peer.on('disconnected', () => {
+      if (cancelled || peer.destroyed) return
+      if (connRef.current?.open) return
+      peer.reconnect()
+    })
+
     peer.on('error', (err) => {
       if (cancelled) return
-      if (
-        err.type === 'peer-unavailable' ||
+      if (err.type === 'peer-unavailable') {
+        lastFailure = 'unavailable'
+        scheduleRetry()
+      } else if (
         err.type === 'network' ||
         err.type === 'server-error' ||
         err.type === 'socket-error' ||
         err.type === 'socket-closed'
       ) {
+        lastFailure = 'network'
         scheduleRetry()
       } else {
         closeWith(`No se pudo conectar: ${err.message}`)
@@ -159,6 +213,7 @@ export function useGuestRoom(code: string, profile: Profile): GuestRoom {
     return () => {
       cancelled = true
       if (retryTimer !== undefined) window.clearTimeout(retryTimer)
+      clearConnTimer()
       connRef.current?.close()
       connRef.current = null
       peer.destroy()
