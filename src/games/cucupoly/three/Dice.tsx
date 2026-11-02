@@ -14,7 +14,7 @@ export type DiceRoll = { values: number[]; total: number; seq: number }
 
 const DIE_SIZE = 0.42
 const REST_Y = TILE_TOP + DIE_SIZE / 2
-const REST_Z = 1.35
+const REST_Z = -2.2
 const SPAN = 0.62
 /** Fracción del tiempo en la que el dado vuela antes de botar. */
 const FLIGHT_SHARE = 0.66

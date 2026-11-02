@@ -572,6 +572,7 @@ button {
 /* ---------- Cucupoly 3D ---------- */
 
 .cp-stage {
+  --cp-rail: 0px;
   position: absolute;
   inset: 0;
   overflow: hidden;
@@ -584,7 +585,7 @@ button {
 
 .cp-canvas {
   position: absolute;
-  inset: 0;
+  inset: 0 0 0 var(--cp-rail);
 }
 
 .cp-canvas canvas {
@@ -614,24 +615,27 @@ button {
 
 .cp-hud {
   position: absolute;
-  top: 10px;
-  left: 10px;
-  right: 86px;
+  top: 8px;
+  left: 8px;
+  right: 8px;
   z-index: 20;
   display: flex;
-  align-items: flex-start;
-  gap: 8px;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
   pointer-events: none;
 }
 
 .cp-hud-players {
   display: flex;
-  gap: 8px;
+  flex-direction: row;
+  gap: 6px;
   min-width: 0;
-  flex: 1;
+  width: 100%;
   overflow-x: auto;
-  padding: 2px 2px 6px;
+  padding: 2px 92px 4px 2px;
   scrollbar-width: none;
+  pointer-events: auto;
 }
 
 .cp-hud-players::-webkit-scrollbar {
@@ -670,6 +674,7 @@ button {
 .cp-pinfo {
   display: flex;
   flex-direction: column;
+  min-width: 0;
   line-height: 1.1;
 }
 
@@ -690,16 +695,11 @@ button {
 }
 
 .cp-turnbanner {
-  position: absolute;
-  top: 58px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 21;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 2px;
-  padding: 8px 20px;
+  padding: 7px 16px;
   border-radius: 14px;
   background: rgba(12, 24, 17, 0.82);
   border: 2px solid rgba(255, 255, 255, 0.16);
@@ -760,7 +760,7 @@ button {
 
 .cp-dice-banner {
   position: absolute;
-  top: 36%;
+  top: 50%;
   left: 50%;
   transform: translate(-50%, -50%) scale(1);
   z-index: 30;
@@ -791,20 +791,15 @@ button {
 }
 
 .cp-dock {
-  position: absolute;
-  left: 50%;
-  bottom: 12px;
-  transform: translateX(-50%);
-  z-index: 25;
   width: max-content;
-  max-width: calc(100vw - 24px);
-  padding: 9px 18px;
+  max-width: 100%;
+  padding: 7px 14px;
   border-radius: 999px;
   border: 2px solid rgba(255, 255, 255, 0.2);
   background: rgba(12, 24, 17, 0.82);
   color: rgba(247, 241, 226, 0.9);
   font-weight: 700;
-  font-size: 0.85rem;
+  font-size: 0.82rem;
   text-align: center;
   box-shadow: 0 5px 0 rgba(0, 0, 0, 0.32);
   backdrop-filter: blur(4px);
@@ -813,21 +808,22 @@ button {
 
 /* Modal de decisiones (compra, subasta, mesa 31, tratos, busetas) */
 
+/* Barra de acciones: mitad inferior del área central, sin oscurecer el tablero. */
 .cp-action-backdrop {
   position: absolute;
-  inset: 0;
+  inset: 0 0 0 var(--cp-rail);
   z-index: 40;
   display: grid;
-  place-items: center;
-  padding: 16px;
-  padding-bottom: 9dvh;
-  background: rgba(6, 14, 9, 0.55);
-  animation: cp-fade-in 150ms ease-out;
+  place-items: end center;
+  padding: 0 12px 12px;
+  background: transparent;
+  pointer-events: none;
 }
 
 .cp-action-card {
-  width: min(100%, 420px);
-  max-height: 84dvh;
+  width: min(100%, 560px);
+  max-height: 46dvh;
+  pointer-events: auto;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -1146,22 +1142,20 @@ button {
 
 @media (max-width: 760px) {
   .cp-hud {
-    right: 10px;
+    right: 8px;
   }
 
   .cp-hud-players {
-    padding-right: 74px;
+    padding-right: 86px;
   }
 
   .cp-turnbanner {
-    top: 52px;
     padding: 6px 14px;
   }
 
   .cp-dice-banner {
     font-size: 1.1rem;
     padding: 9px 18px;
-    top: 32%;
   }
 
   .game-exit {
@@ -1170,7 +1164,6 @@ button {
   }
 
   .cp-dock {
-    bottom: 8px;
     font-size: 0.78rem;
     padding: 8px 14px;
   }
@@ -1199,5 +1192,68 @@ button {
 
   .room-ticket strong {
     font-size: 2.4rem;
+  }
+}
+
+/* Franja lateral delgada: tarjetas de jugadores fuera del tablero. */
+@media (orientation: landscape) and (min-width: 640px) {
+  .cp-stage {
+    --cp-rail: 156px;
+  }
+
+  .cp-hud {
+    top: 10px;
+    bottom: 10px;
+    left: 10px;
+    right: auto;
+    width: calc(var(--cp-rail) - 20px);
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .cp-hud-players {
+    flex: 0 1 auto;
+    flex-direction: column;
+    align-items: stretch;
+    width: 100%;
+    padding: 2px;
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
+  .cp-pcard {
+    width: 100%;
+  }
+
+  .cp-pname {
+    max-width: none;
+  }
+
+  .cp-turnbanner {
+    max-width: 100%;
+  }
+
+  .cp-dock {
+    margin-top: auto;
+    max-width: 100%;
+  }
+
+  .cp-dice-banner {
+    top: 44%;
+    left: calc(var(--cp-rail) + (100% - var(--cp-rail)) / 2);
+  }
+
+  .cp-action-backdrop {
+    left: var(--cp-rail);
+    padding: 0 16px 16px;
+  }
+
+  .cp-action-card {
+    width: min(100%, 620px);
+    max-height: 46dvh;
+  }
+
+  .cp-sheet-backdrop {
+    left: var(--cp-rail);
   }
 }

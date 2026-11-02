@@ -4,8 +4,10 @@ import * as THREE from 'three'
 import { BOARD, gridPosition, type Tile } from '../board'
 import type { CucupolyState } from '../engine'
 import type { Player } from '../../../types'
+import type { RollPlan } from '../planAnimations'
 import { tileColor } from '../visual'
-import { createCenterTexture, createTileTexture } from './textures'
+import { createCenterTexture, createTileTexture, setMaxAnisotropy } from './textures'
+import { computeFraming } from './framing'
 import { CELL, TILE_TOP } from './layout'
 import { Dice, type DiceRoll } from './Dice'
 import { Tokens } from './Tokens'
@@ -15,13 +17,16 @@ type BoardSceneProps = {
   players: Player[]
   /** Última tirada a animar; null si no hay ninguna en juego. */
   roll: DiceRoll | null
+  /** Plan de la tirada (qué ficha camina y por dónde). */
+  walk: RollPlan | null
   /** false mientras corren los dados: las fichas esperan para caminar. */
   tokenGate: boolean
   onSelectTile: (index: number) => void
   onBusyChange: (busy: boolean) => void
 }
 
-const TILT = (55 * Math.PI) / 180
+/** ~62°: las casillas lejanas se leen mejor sin perder la sensación 3D. */
+const TILT = (62 * Math.PI) / 180
 const FOV = 42
 
 function supportsWebGL(): boolean {
@@ -37,30 +42,27 @@ function CameraRig() {
   const { camera, size } = useThree()
 
   useLayoutEffect(() => {
-    const aspect = size.width / Math.max(1, size.height)
-    const tan = Math.tan((FOV / 2) * (Math.PI / 180))
-
-    // Deja aire para la franja superior y la barra inferior.
-    const availableWidth = Math.max(260, size.width - 24)
-    const availableHeight = Math.max(240, size.height - 196)
-    const fillWidth = Math.min(1, availableWidth / size.width)
-    const fillHeight = Math.min(1, availableHeight / size.height)
-
-    const boardWidth = 14.4
-    const boardDepth = 14.4 * Math.sin(TILT)
-    const distanceForWidth = boardWidth / (fillWidth * 2 * tan * aspect)
-    const distanceForHeight = boardDepth / (fillHeight * 2 * tan)
-    const distance = Math.max(distanceForWidth, distanceForHeight, 13)
-
+    const framing = computeFraming(size.width, size.height, { tilt: TILT, fov: FOV })
     const perspective = camera as THREE.PerspectiveCamera
-    perspective.fov = FOV
+    perspective.fov = framing.fov
     perspective.near = 0.1
-    perspective.far = distance * 3 + 60
-    perspective.position.set(0, distance * Math.sin(TILT), distance * Math.cos(TILT))
-    perspective.lookAt(0, 0, 0.6)
+    perspective.far = framing.distance * 3 + 60
+    perspective.position.set(
+      0,
+      framing.targetZ + framing.distance * Math.sin(framing.tilt),
+      framing.targetZ + framing.distance * Math.cos(framing.tilt),
+    )
+    perspective.lookAt(0, 0, framing.targetZ)
     perspective.updateProjectionMatrix()
   }, [camera, size.height, size.width])
 
+  return null
+}
+
+/** Fija la anisotropía máxima del renderer antes de crear las texturas. */
+function RendererSetup() {
+  const gl = useThree((state) => state.gl)
+  setMaxAnisotropy(gl.capabilities.getMaxAnisotropy())
   return null
 }
 
@@ -187,6 +189,7 @@ export default function BoardScene({
   state,
   players,
   roll,
+  walk,
   tokenGate,
   onSelectTile,
   onBusyChange,
@@ -201,11 +204,13 @@ export default function BoardScene({
     setBusy(animating.current.size > 0)
   }, [])
 
-  useEffect(() => {
+  // Layout: el padre deshabilita las acciones antes de pintar el fotograma en
+  // el que arranca la caminata.
+  useLayoutEffect(() => {
     onBusyChange(busy)
   }, [busy, onBusyChange])
 
-  useEffect(() => () => onBusyChange(false), [onBusyChange])
+  useLayoutEffect(() => () => onBusyChange(false), [onBusyChange])
 
   if (!webgl) {
     return (
@@ -224,6 +229,7 @@ export default function BoardScene({
       camera={{ fov: FOV, near: 0.1, far: 200, position: [0, 18, 13] }}
     >
       <CameraRig />
+      <RendererSetup />
       <hemisphereLight args={['#E8F3E4', '#13251B', 0.8]} />
       <directionalLight
         position={[7, 14, 9]}
@@ -244,7 +250,13 @@ export default function BoardScene({
       <directionalLight position={[-6, 7, -8]} intensity={0.35} color="#FBD9A0" />
 
       <Board state={state} players={players} onSelectTile={onSelectTile} />
-      <Tokens state={state} players={players} gate={tokenGate} onAnimating={handleAnimating} />
+      <Tokens
+        state={state}
+        players={players}
+        walk={walk}
+        gate={tokenGate}
+        onAnimating={handleAnimating}
+      />
       <Dice roll={roll} />
     </Canvas>
   )

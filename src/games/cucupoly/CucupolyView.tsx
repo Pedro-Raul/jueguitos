@@ -1,8 +1,8 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import type { GameAction, GameViewProps, Player } from '../../types'
 import { BOARD } from './board'
 import { rentFor, type CucupolyState, type TradeState } from './engine'
-import { latestRoll, rollKey, type RollHint } from './rollHint'
+import { planAnimations, snapshotSeen, type RollPlan, type SeenRoll } from './planAnimations'
 import { DICE_SECONDS } from './three/layout'
 import { RULES } from './rules.config'
 import {
@@ -564,11 +564,10 @@ function TileSheet({
 export function CucupolyView({ state, me, players, dispatch }: GameViewProps<CucupolyState>) {
   const [selected, setSelected] = useState<number | null>(null)
   const [busy, setBusy] = useState(false)
-  const [play, setPlay] = useState<{ hint: RollHint; seq: number } | null>(null)
+  const [play, setPlay] = useState<RollPlan | null>(null)
   const [diceBlocked, setDiceBlocked] = useState(false)
   const [banner, setBanner] = useState<string | null>(null)
-  const seenRoll = useRef<string | null>(null)
-  const firstRoll = useRef(true)
+  const seenRoll = useRef<SeenRoll | null>(null)
 
   const current = state.order[state.currentIndex]
   const modifier =
@@ -581,29 +580,23 @@ export function CucupolyView({ state, me, players, dispatch }: GameViewProps<Cuc
   const handleSelect = useCallback((index: number) => setSelected(index), [])
   const handleBusy = useCallback((value: boolean) => setBusy(value), [])
 
-  const hint = useMemo(() => latestRoll(state), [state])
-
   // Detección sincrónica durante el render: al llegar un snapshot con una
-  // tirada nueva, el bloqueo de dados queda activo en esta misma pasada,
-  // así las fichas esperan sin carreras de estados.
-  if (hint && rollKey(hint) !== seenRoll.current) {
-    seenRoll.current = rollKey(hint)
-    if (firstRoll.current) {
-      // Reconexión o entrada tarde: baseline sin animación.
-      firstRoll.current = false
-    } else {
-      setPlay({ hint, seq: (play?.seq ?? 0) + 1 })
-      setDiceBlocked(true)
-    }
+  // tirada nueva (rollSeq distinto), el plan y el bloqueo entran en esta misma
+  // pasada, así las fichas esperan a los dados sin carreras de estados.
+  const animation = planAnimations(state, seenRoll.current)
+  seenRoll.current = snapshotSeen(state)
+  if (animation.kind === 'roll') {
+    setPlay(animation.roll)
+    setDiceBlocked(true)
   }
 
   // Orden dados → ficha → botones: 1.2 s de dados, banner central 2 s.
   useEffect(() => {
     if (!play) return
     const text =
-      play.hint.values.length > 1
-        ? `${play.hint.values.join(' + ')} = ${play.hint.total}`
-        : `${play.hint.total}`
+      play.values.length > 1
+        ? `${play.values.join(' + ')} = ${play.total}`
+        : `${play.total}`
     const diceMs = DICE_SECONDS * 1000
     const settle = window.setTimeout(() => {
       setDiceBlocked(false)
@@ -617,7 +610,9 @@ export function CucupolyView({ state, me, players, dispatch }: GameViewProps<Cuc
     }
   }, [play])
 
-  const roll = play ? { ...play.hint, seq: play.seq } : null
+  const roll = play
+    ? { values: play.values, total: play.total, seq: play.seq }
+    : null
   const locked = diceBlocked || busy
   const acting = mustAct(state, me.id)
 
@@ -629,6 +624,7 @@ export function CucupolyView({ state, me, players, dispatch }: GameViewProps<Cuc
             state={state}
             players={players}
             roll={roll}
+            walk={play}
             tokenGate={!diceBlocked}
             onSelectTile={handleSelect}
             onBusyChange={handleBusy}
@@ -677,20 +673,20 @@ export function CucupolyView({ state, me, players, dispatch }: GameViewProps<Cuc
             )
           })}
         </div>
-      </header>
 
-      <div className="cp-turnbanner" role="status">
-        <span className="cp-eyebrow">Turno {state.turnNumber + 1}</span>
-        <strong>{nameOf(state, current)}</strong>
-        <span className="cp-phase">{phaseHint(state)}</span>
-        {modifier ? <span className="cp-badge">🎲 {modifier.dice} dado(s)</span> : null}
-      </div>
-
-      {!acting && state.phase !== 'finished' ? (
-        <div className="cp-dock" role="status">
-          {phaseHint(state)}
+        <div className="cp-turnbanner" role="status">
+          <span className="cp-eyebrow">Turno {state.turnNumber + 1}</span>
+          <strong>{nameOf(state, current)}</strong>
+          <span className="cp-phase">{phaseHint(state)}</span>
+          {modifier ? <span className="cp-badge">🎲 {modifier.dice} dado(s)</span> : null}
         </div>
-      ) : null}
+
+        {!acting && state.phase !== 'finished' ? (
+          <div className="cp-dock" role="status">
+            {phaseHint(state)}
+          </div>
+        ) : null}
+      </header>
 
       {acting ? (
         <div className="cp-action-backdrop">

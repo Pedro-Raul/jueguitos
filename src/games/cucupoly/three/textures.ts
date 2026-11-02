@@ -1,6 +1,11 @@
 import * as THREE from 'three'
 import type { Tile } from '../board'
 import { tileColor, tileIcon, tileTextColor } from '../visual'
+import {
+  TILE_TEXTURE_SIZE,
+  tileTextureLayout,
+  type TextMeasure,
+} from './tileTextureLayout'
 
 const FONT_STACK =
   '"Segoe UI", ui-sans-serif, system-ui, -apple-system, Roboto, "Helvetica Neue", Arial, sans-serif'
@@ -15,48 +20,28 @@ function makeCanvas(size: number): { canvas: HTMLCanvasElement; ctx: CanvasRende
   return { canvas, ctx }
 }
 
+/** Anisotropía máxima del renderer; BoardScene la fija al arrancar. */
+let maxAnisotropy = 1
+
+export function setMaxAnisotropy(value: number): void {
+  const next = Math.floor(value)
+  maxAnisotropy = Number.isFinite(next) && next > 1 ? next : 1
+}
+
 function toTexture(canvas: HTMLCanvasElement): THREE.CanvasTexture {
   const texture = new THREE.CanvasTexture(canvas)
   texture.colorSpace = THREE.SRGBColorSpace
-  texture.anisotropy = 4
+  texture.anisotropy = maxAnisotropy
   texture.needsUpdate = true
   return texture
 }
 
-function wrapText(
-  ctx: CanvasRenderingContext2D,
-  text: string,
-  maxWidth: number,
-  maxLines: number,
-): string[] {
-  const words = text.split(/\s+/).filter(Boolean)
-  const lines: string[] = []
-  let current = ''
-
-  for (const word of words) {
-    const candidate = current ? `${current} ${word}` : word
-    if (ctx.measureText(candidate).width <= maxWidth || current === '') {
-      current = candidate
-      continue
-    }
-    lines.push(current)
-    current = word
-    if (lines.length === maxLines - 1) break
+/** Medición real con canvas para el autoajuste del nombre. */
+function canvasMeasure(ctx: CanvasRenderingContext2D): TextMeasure {
+  return (text, fontPx, weight) => {
+    ctx.font = `${weight} ${fontPx}px ${FONT_STACK}`
+    return ctx.measureText(text).width
   }
-
-  if (current && lines.length < maxLines) lines.push(current)
-
-  // Si aún sobra texto, recorta la última línea con puntos suspensivos.
-  const consumed = lines.join(' ').split(/\s+/).filter(Boolean).length
-  if (consumed < words.length && lines.length > 0) {
-    let last = lines[lines.length - 1]
-    while (last.length > 1 && ctx.measureText(`${last}…`).width > maxWidth) {
-      last = last.slice(0, -1)
-    }
-    lines[lines.length - 1] = `${last}…`
-  }
-
-  return lines
 }
 
 function roundedRect(
@@ -78,54 +63,51 @@ function roundedRect(
 
 /** Textura de la cara superior de una casilla. */
 export function createTileTexture(tile: Tile): THREE.CanvasTexture {
-  const size = 256
+  const size = TILE_TEXTURE_SIZE
   const { canvas, ctx } = makeCanvas(size)
   const background = tileColor(tile)
   const foreground = tileTextColor(tile)
   const icon = tileIcon(tile)
+  const layout = tileTextureLayout(tile, Boolean(icon), canvasMeasure(ctx))
 
   ctx.fillStyle = background
   ctx.fillRect(0, 0, size, size)
 
   // Bisel interior para que cada casilla se lea como una pieza de cartón.
   ctx.strokeStyle = 'rgba(0, 0, 0, 0.18)'
-  ctx.lineWidth = 8
-  ctx.strokeRect(4, 4, size - 8, size - 8)
+  ctx.lineWidth = 16
+  ctx.strokeRect(8, 8, size - 16, size - 16)
   ctx.strokeStyle = 'rgba(255, 255, 255, 0.28)'
-  ctx.lineWidth = 3
-  ctx.strokeRect(11, 11, size - 22, size - 22)
+  ctx.lineWidth = 6
+  ctx.strokeRect(22, 22, size - 44, size - 44)
 
   ctx.fillStyle = foreground
   ctx.textAlign = 'center'
   ctx.textBaseline = 'middle'
 
-  if (icon) {
-    ctx.font = `58px ${EMOJI_STACK}`
-    ctx.fillText(icon, size / 2, 84)
+  if (icon && layout.icon) {
+    ctx.font = `${layout.icon.fontPx}px ${EMOJI_STACK}`
+    ctx.fillText(icon, size / 2, layout.icon.y)
   }
 
-  const nameSize = tile.name.length > 17 ? 21 : tile.name.length > 12 ? 24 : 28
-  ctx.font = `800 ${nameSize}px ${FONT_STACK}`
-  const lines = wrapText(ctx, tile.name.toUpperCase(), 212, icon ? 3 : 4)
-  const lineHeight = nameSize + 6
-  const firstY = icon ? 138 : 84
-
-  lines.forEach((line, index) => {
-    ctx.fillText(line, size / 2, firstY + index * lineHeight)
+  ctx.font = `800 ${layout.name.fontPx}px ${FONT_STACK}`
+  const count = layout.name.lines.length
+  layout.name.lines.forEach((line, index) => {
+    const y = layout.name.centerY + (index - (count - 1) / 2) * layout.name.lineHeightPx
+    ctx.fillText(line, size / 2, y)
   })
 
-  if (tile.price !== undefined) {
-    ctx.font = `900 30px ${FONT_STACK}`
-    ctx.fillText(`$${tile.price}`, size / 2, 232)
-  } else if (tile.tax !== undefined) {
-    ctx.font = `900 30px ${FONT_STACK}`
-    ctx.fillText(`-$${tile.tax}`, size / 2, 232)
+  if (layout.price) {
+    ctx.font = `900 ${layout.price.fontPx}px ${FONT_STACK}`
+    const text =
+      tile.price !== undefined ? `$${tile.price}` : tile.tax !== undefined ? `-$${tile.tax}` : ''
+    ctx.fillText(text, size / 2, layout.price.y)
   }
 
-  ctx.font = `700 18px ${FONT_STACK}`
+  ctx.font = `700 ${layout.index.fontPx}px ${FONT_STACK}`
   ctx.textAlign = 'left'
   ctx.globalAlpha = 0.55
-  ctx.fillText(String(tile.index), 18, 24)
+  ctx.fillText(String(tile.index), layout.index.x, layout.index.y)
   ctx.globalAlpha = 1
 
   return toTexture(canvas)

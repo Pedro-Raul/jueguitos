@@ -78,6 +78,13 @@ export type CucupolyState = {
   trade: TradeState | null
   log: LogEntry[]
   winner: string | null
+  /**
+   * Contador de tiradas reales de dados (sube en 1 por tirada). Es la única
+   * señal que usan los clientes para animar exactamente una vez cada tirada,
+   * incluso si dos tiradas sacan los mismos valores. Entrar a la cárcel no
+   * tira dados y por tanto no lo incrementa.
+   */
+  rollSeq: number
 }
 
 export const CHANCE_EVENTS = ['thirty-one', 'slow', 'fast'] as const
@@ -355,6 +362,7 @@ export function init(players: Player[], seed: number): CucupolyState {
     trade: null,
     log: [],
     winner: null,
+    rollSeq: 0,
   }
 
   const properties = BOARD.filter((tile) => tile.type === 'property')
@@ -448,6 +456,7 @@ function handleRoll(state: CucupolyState, playerId: string): CucupolyState | { e
   for (let i = 0; i < count; i += 1) values.push(randomInt(state, 1, 6))
   const total = values.reduce((sum, value) => sum + value, 0)
   state.dice = { values, total }
+  state.rollSeq += 1
 
   const from = state.positions[playerId] ?? 0
   if (from + total >= 48) {

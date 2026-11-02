@@ -3,6 +3,7 @@ import { useFrame } from '@react-three/fiber'
 import * as THREE from 'three'
 import type { Player } from '../../../types'
 import type { CucupolyState } from '../engine'
+import type { RollPlan } from '../planAnimations'
 import { pathBetween } from '../visual'
 import { createEmojiTexture } from './textures'
 import { HOP_HEIGHT, HOP_SECONDS, tileWorld } from './layout'
@@ -27,7 +28,8 @@ function assignRingColors(players: Player[]): string[] {
 type TokenProps = {
   player: Player
   target: number
-  direct: boolean
+  /** Plan de la tirada si esta ficha es la que tiró; null en las demás. */
+  walk: RollPlan | null
   /** false mientras corren los dados: la ficha guarda el destino y espera. */
   gate: boolean
   slotIndex: number
@@ -38,7 +40,7 @@ type TokenProps = {
 
 type Hop = { from: number; to: number }
 
-function Token({ player, target, direct, gate, slotIndex, slotCount, ringColor, onAnimating }: TokenProps) {
+function Token({ player, target, walk, gate, slotIndex, slotCount, ringColor, onAnimating }: TokenProps) {
   const outer = useRef<THREE.Group>(null)
   const display = useRef(target)
   const queue = useRef<Hop[]>([])
@@ -46,7 +48,8 @@ function Token({ player, target, direct, gate, slotIndex, slotCount, ringColor, 
   const active = useRef(false)
   const mounted = useRef(false)
   const busy = useRef(false)
-  const pending = useRef<number | null>(null)
+  const pending = useRef<RollPlan | null>(null)
+  const played = useRef<number | null>(null)
 
   const slot = useMemo(() => {
     if (slotCount <= 1) return { x: 0, z: 0 }
@@ -62,38 +65,49 @@ function Token({ player, target, direct, gate, slotIndex, slotCount, ringColor, 
     outer.current?.position.set(x, y, z)
   }, [target])
 
-  useEffect(() => {
-    if (!mounted.current) return
-    if (target === display.current && queue.current.length === 0 && pending.current === null) return
+  // El plan de la tirada se guarda hasta que los dados terminen.
+  useLayoutEffect(() => {
+    if (!walk || walk.playerId !== player.id) return
+    if (played.current === walk.seq) return
+    pending.current = walk
+  }, [walk, player.id])
 
-    // Orden dados → ficha: con la puerta cerrada solo se anota el destino.
-    if (!gate) {
-      pending.current = target
-      return
-    }
+  // Orden dados → ficha: al abrirse la puerta se camina casilla a casilla.
+  // Es layout para que el bloqueo de botones entre en el mismo commit que la
+  // caminata, sin un fotograma con acciones habilitadas.
+  useLayoutEffect(() => {
+    if (!gate) return
+    const next = pending.current
+    if (!next) return
     pending.current = null
+    played.current = next.seq
 
-    const steps = direct ? [target] : pathBetween(display.current, target)
+    const steps = next.direct ? [next.to] : pathBetween(display.current, next.to)
     if (steps.length === 0) return
 
     let from = display.current
-    const hops = steps.map((to) => {
+    queue.current = steps.map((to) => {
       const hop = { from, to }
       from = to
       return hop
     })
-
-    queue.current = hops
     elapsed.current = 0
+    active.current = true
 
-    if (!active.current) {
-      active.current = true
-      if (!busy.current) {
-        busy.current = true
-        onAnimating(player.id, true)
-      }
+    if (!busy.current) {
+      busy.current = true
+      onAnimating(player.id, true)
     }
-  }, [target, direct, gate, onAnimating, player.id])
+  }, [gate, walk, player.id, onAnimating])
+
+  // Movimientos sin tirada (salto de ruta, entrada, reconexión): sin animar.
+  useEffect(() => {
+    if (active.current || pending.current) return
+    if (target === display.current) return
+    display.current = target
+    const [x, y, z] = tileWorld(target)
+    outer.current?.position.set(x, y, z)
+  }, [target])
 
   useEffect(
     () => () => {
@@ -177,21 +191,16 @@ function Token({ player, target, direct, gate, slotIndex, slotCount, ringColor, 
 export function Tokens({
   state,
   players,
+  walk,
   gate,
   onAnimating,
 }: {
   state: CucupolyState
   players: Player[]
+  walk: RollPlan | null
   gate: boolean
   onAnimating: AnimatingHandler
 }) {
-  const previous = useRef<CucupolyState | null>(null)
-  const prev = previous.current
-
-  useEffect(() => {
-    previous.current = state
-  }, [state])
-
   const occupants = useMemo(() => {
     const map = new Map<number, Player[]>()
     for (const player of players) {
@@ -212,13 +221,7 @@ export function Tokens({
         if (state.bankrupt.includes(player.id)) return null
 
         const target = state.positions[player.id] ?? 0
-        const before = prev?.positions[player.id]
-        const direct =
-          !prev ||
-          before === undefined ||
-          before === target ||
-          prev.phase === 'bus-move' ||
-          (prev.inJail[player.id] !== true && state.inJail[player.id] === true)
+        const ownWalk = walk && walk.playerId === player.id ? walk : null
 
         const group = occupants.get(target) ?? [player]
         const slotIndex = Math.max(
@@ -231,7 +234,7 @@ export function Tokens({
             key={player.id}
             player={player}
             target={target}
-            direct={direct}
+            walk={ownWalk}
             gate={gate}
             slotIndex={slotIndex}
             slotCount={group.length}
