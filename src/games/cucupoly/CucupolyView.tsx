@@ -613,7 +613,15 @@ export function CucupolyView({ state, me, players, dispatch }: GameViewProps<Cuc
   const roll = play
     ? { values: play.values, total: play.total, seq: play.seq }
     : null
-  const locked = diceBlocked || busy
+  // Dados + caminata: mientras dure, no se revela la casilla ni el menú de
+  // decisión, porque el estado ya conoce el destino antes de que la ficha caiga.
+  const animating = diceBlocked || busy
+  const statusHint = animating
+    ? diceBlocked
+      ? 'Tirando los dados…'
+      : 'Moviendo la ficha…'
+    : phaseHint(state)
+  const locked = animating
   const acting = mustAct(state, me.id)
 
   return (
@@ -677,18 +685,18 @@ export function CucupolyView({ state, me, players, dispatch }: GameViewProps<Cuc
         <div className="cp-turnbanner" role="status">
           <span className="cp-eyebrow">Turno {state.turnNumber + 1}</span>
           <strong>{nameOf(state, current)}</strong>
-          <span className="cp-phase">{phaseHint(state)}</span>
+          <span className="cp-phase">{statusHint}</span>
           {modifier ? <span className="cp-badge">🎲 {modifier.dice} dado(s)</span> : null}
         </div>
 
         {!acting && state.phase !== 'finished' ? (
           <div className="cp-dock" role="status">
-            {phaseHint(state)}
+            {statusHint}
           </div>
         ) : null}
       </header>
 
-      {acting ? (
+      {acting && !animating ? (
         <div className="cp-action-backdrop">
           <section
             className="cp-action-card"
