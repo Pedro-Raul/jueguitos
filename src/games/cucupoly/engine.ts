@@ -21,6 +21,8 @@ import {
 } from './events'
 
 export type Phase =
+  | 'turn-order-roll'
+  | 'turn-order-reveal'
   | 'waiting-roll'
   | 'event'
   | 'buy-decision'
@@ -34,6 +36,24 @@ export type LogEntry = { turn: number; text: string }
 
 /** Ventana de una habilidad expresada en números de turno absolutos. */
 export type AbilityState = { from: number; until: number; readyAt: number }
+
+/**
+ * Sorteo del orden de turnos previo a la ronda 1.
+ * - `groups`: bloques de posiciones pendientes, de mayor a menor. Un bloque de
+ *   más de un jugador es un empate que debe relanzar.
+ * - `queue`: jugadores que deben lanzar ahora, en orden.
+ * - `rolls`: último valor de cada jugador (se muestra en el HUD).
+ * - `request`: jugador que ya pidió su tirada y espera el valor del anfitrión.
+ */
+export type TurnOrderState = {
+  rolls: Record<string, number>
+  queue: string[]
+  groups: string[][]
+  request: string | null
+}
+
+/** Tiempo que el HUD muestra el orden final antes de empezar la ronda 1. */
+export const TURN_ORDER_REVEAL_MS = 4000
 
 /**
  * Variantes de subasta de evento:
@@ -90,7 +110,12 @@ export type TradeState = {
 export type CucupolyState = {
   seed: number
   names: Record<string, string>
+  /** Asientos en orden de entrada; el primer asiento es el anfitrión. */
   order: string[]
+  /** Orden de turnos resuelto con los dados; empieza como `order`. */
+  turnOrder: string[]
+  /** Sorteo de orden en curso; null cuando la partida ya arrancó. */
+  turnOrderState: TurnOrderState | null
   currentIndex: number
   turnNumber: number
   /** Ronda actual (1-based). Sube cuando el turno vuelve a empezar. */
@@ -153,7 +178,7 @@ function activeIds(state: CucupolyState): string[] {
 }
 
 function currentId(state: CucupolyState): string {
-  return state.order[state.currentIndex]
+  return state.turnOrder[state.currentIndex]
 }
 
 function ownsType(state: CucupolyState, playerId: string, type: 'bus' | 'service'): number {
@@ -218,6 +243,15 @@ function cloneState(source: CucupolyState): CucupolyState {
   return {
     ...source,
     order: [...source.order],
+    turnOrder: [...source.turnOrder],
+    turnOrderState: source.turnOrderState
+      ? {
+          rolls: { ...source.turnOrderState.rolls },
+          queue: [...source.turnOrderState.queue],
+          groups: source.turnOrderState.groups.map((group) => [...group]),
+          request: source.turnOrderState.request,
+        }
+      : null,
     owners: { ...source.owners },
     positions: { ...source.positions },
     money: { ...source.money },
@@ -283,11 +317,11 @@ function endTurn(state: CucupolyState): void {
   state.table31 = null
   state.auction = null
 
-  const size = state.order.length
+  const size = state.turnOrder.length
   const previousIndex = state.currentIndex
   for (let step = 1; step <= size; step += 1) {
     const index = (state.currentIndex + step) % size
-    if (!state.bankrupt.includes(state.order[index])) {
+    if (!state.bankrupt.includes(state.turnOrder[index])) {
       state.currentIndex = index
       break
     }
@@ -356,6 +390,12 @@ function readInt(payload: unknown, key: string): number | null {
   return typeof value === 'number' && Number.isInteger(value) ? value : null
 }
 
+function readString(payload: unknown, key: string): string | null {
+  if (typeof payload !== 'object' || payload === null) return null
+  const value = (payload as Record<string, unknown>)[key]
+  return typeof value === 'string' ? value : null
+}
+
 function readEventId(payload: unknown): InitialEventId | null {
   if (typeof payload !== 'object' || payload === null) return null
   const value = (payload as Record<string, unknown>).eventId
@@ -400,12 +440,19 @@ export function init(players: Player[], seed: number): CucupolyState {
     seed,
     names,
     order,
+    turnOrder: [...order],
+    turnOrderState: {
+      rolls: {},
+      queue: [...order],
+      groups: [[...order]],
+      request: null,
+    },
     currentIndex: 0,
     turnNumber: 0,
     roundNumber: 1,
     initialEvent: null,
     eventSeq: 0,
-    phase: 'waiting-roll',
+    phase: 'turn-order-roll',
     owners: {},
     positions,
     money,
@@ -438,6 +485,12 @@ export function reduce(
   const state = cloneState(source)
 
   switch (action.type) {
+    case 'request-order-roll':
+      return handleRequestOrderRoll(state, playerId)
+    case 'roll-for-order':
+      return handleRollForOrder(state, playerId, action.payload)
+    case 'finish-turn-order':
+      return handleFinishTurnOrder(state, playerId)
     case 'roll':
       return handleRoll(state, playerId)
     case 'buy':
@@ -487,6 +540,116 @@ export function reduce(
     default:
       return { error: `Acción desconocida: ${action.type}` }
   }
+}
+
+function handleRequestOrderRoll(
+  state: CucupolyState,
+  playerId: string,
+): CucupolyState | { error: string } {
+  if (state.phase !== 'turn-order-roll' || !state.turnOrderState) {
+    return { error: 'El sorteo de orden ya terminó.' }
+  }
+
+  const sorteo = state.turnOrderState
+  if (sorteo.request !== null) return { error: 'Ya hay una tirada en curso.' }
+  if (sorteo.queue[0] !== playerId) return { error: 'No te toca lanzar.' }
+
+  sorteo.request = playerId
+  return state
+}
+
+function handleRollForOrder(
+  state: CucupolyState,
+  senderId: string,
+  payload: unknown,
+): CucupolyState | { error: string } {
+  if (state.phase !== 'turn-order-roll' || !state.turnOrderState) {
+    return { error: 'El sorteo de orden ya terminó.' }
+  }
+  // El valor lo decide el anfitrión; ningún invitado puede inyectarlo.
+  if (senderId !== state.order[0]) {
+    return { error: 'Solo el anfitrión puede resolver la tirada.' }
+  }
+
+  const roller = readString(payload, 'playerId')
+  const value = readInt(payload, 'value')
+  if (roller === null || value === null) return { error: 'Tirada no válida.' }
+  if (value < 1 || value > 6) return { error: 'El dado va del 1 al 6.' }
+
+  const sorteo = state.turnOrderState
+  if (sorteo.request !== roller || sorteo.queue[0] !== roller) {
+    return { error: 'Esa tirada no está pendiente.' }
+  }
+
+  sorteo.rolls[roller] = value
+  sorteo.request = null
+  sorteo.queue = sorteo.queue.slice(1)
+  state.rollSeq += 1
+  pushLog(
+    state,
+    `${state.names[roller]} tira ${value} = ${value} y espera el orden de turnos.`,
+  )
+
+  if (sorteo.queue.length === 0) resolveOrderRound(state)
+  return state
+}
+
+/**
+ * Cierra la pasada de tiradas del primer bloque pendiente y lo divide por
+ * valores. Los bloques de un solo jugador quedan fijos; los empates vuelven a
+ * la cola solo entre sus miembros, sin mover a los demás.
+ */
+function resolveOrderRound(state: CucupolyState): void {
+  const sorteo = state.turnOrderState
+  if (!sorteo) return
+
+  const index = sorteo.groups.findIndex((group) => group.length > 1)
+  if (index !== -1) {
+    const block = sorteo.groups[index]
+    const sorted = [...block].sort(
+      (a, b) => (sorteo.rolls[b] ?? 0) - (sorteo.rolls[a] ?? 0),
+    )
+
+    const split: string[][] = []
+    for (const id of sorted) {
+      const last = split[split.length - 1]
+      if (last && sorteo.rolls[last[0]] === sorteo.rolls[id]) last.push(id)
+      else split.push([id])
+    }
+    sorteo.groups.splice(index, 1, ...split)
+  }
+
+  const pending = sorteo.groups.find((group) => group.length > 1)
+  sorteo.queue = pending ? [...pending] : []
+
+  if (!pending) {
+    state.turnOrder = sorteo.groups.flat()
+    state.currentIndex = 0
+    state.phase = 'turn-order-reveal'
+    pushLog(
+      state,
+      `Orden de turnos: ${state.turnOrder.map((id) => state.names[id]).join(', ')}.`,
+    )
+  }
+}
+
+function handleFinishTurnOrder(
+  state: CucupolyState,
+  playerId: string,
+): CucupolyState | { error: string } {
+  if (state.phase !== 'turn-order-reveal') {
+    return { error: 'El orden de turnos aún no está listo.' }
+  }
+  if (playerId !== state.order[0]) {
+    return { error: 'Solo el anfitrión puede empezar la partida.' }
+  }
+
+  state.turnOrderState = null
+  state.phase = 'waiting-roll'
+  state.currentIndex = 0
+  state.roundNumber = 1
+  pushLog(state, `Empieza la ronda 1 con ${state.names[state.turnOrder[0]]}.`)
+  return state
 }
 
 function handleRoll(state: CucupolyState, playerId: string): CucupolyState | { error: string } {
@@ -1181,10 +1344,10 @@ function startTableDraw(state: CucupolyState): void {
     return
   }
 
-  const size = state.order.length
+  const size = state.turnOrder.length
   const rotated: string[] = []
   for (let step = 0; step < size; step += 1) {
-    const id = state.order[(state.currentIndex + step) % size]
+    const id = state.turnOrder[(state.currentIndex + step) % size]
     if (table.participants.includes(id)) rotated.push(id)
   }
 

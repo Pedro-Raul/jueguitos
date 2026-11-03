@@ -28,11 +28,39 @@ const TWO = [ANA, BETO]
 const THREE = [ANA, BETO, CARO]
 
 /**
- * Estado limpio para aislar la regla bajo prueba. `init` arranca sin evento
- * inicial; los tests de eventos lo aplican explícitamente.
+ * Estado limpio para aislar la regla bajo prueba. `init` arranca en el sorteo
+ * de orden; este helper lo resuelve con valores descendentes para conservar el
+ * orden de entrada que esperan los tests de ronda 1.
  */
 function fresh(players: Player[] = TWO, seed = 7): CucupolyState {
-  return init(players, seed)
+  let state = init(players, seed)
+  state.order.forEach((id, index) => {
+    state = reduce(state, { type: 'request-order-roll' }, id) as CucupolyState
+    state = reduce(
+      state,
+      { type: 'roll-for-order', payload: { playerId: id, value: 6 - index } },
+      state.order[0],
+    ) as CucupolyState
+  })
+  return reduce(state, { type: 'finish-turn-order' }, state.order[0]) as CucupolyState
+}
+
+/** Pide y aplica una tirada del sorteo de orden. */
+function orderRoll(
+  state: CucupolyState,
+  playerId: string,
+  value: number,
+): CucupolyState {
+  const requested = reduce(
+    state,
+    { type: 'request-order-roll' },
+    playerId,
+  ) as CucupolyState
+  return reduce(
+    requested,
+    { type: 'roll-for-order', payload: { playerId, value } },
+    requested.order[0],
+  ) as CucupolyState
 }
 
 /** Cierra un turno sin tirar dados: declina una compra ficticia. */
@@ -41,7 +69,7 @@ function passTurn(state: CucupolyState, playerId: string): CucupolyState {
     ...state,
     phase: 'buy-decision',
     pendingBuy: 1,
-    currentIndex: state.order.indexOf(playerId),
+    currentIndex: state.turnOrder.indexOf(playerId),
   }
   return reduce(staged, { type: 'decline' }, playerId) as CucupolyState
 }
@@ -83,7 +111,7 @@ function aimAtChance(state: CucupolyState, playerId: string, seed: number): Cucu
   const target = 9 // Sorpresa
   state.seed = seed
   state.phase = 'waiting-roll'
-  state.currentIndex = state.order.indexOf(playerId)
+  state.currentIndex = state.turnOrder.indexOf(playerId)
   state.positions[playerId] = (target - total + 48) % 48
   return state
 }
@@ -977,5 +1005,108 @@ describe('pureza', () => {
     reduce(state, { type: 'roll' }, 'p1')
 
     expect(JSON.stringify(state)).toBe(snapshot)
+  })
+})
+
+describe('sorteo de orden de turnos', () => {
+  it('arranca antes de la ronda 1 y ordena de mayor a menor', () => {
+    let state = init(THREE, 7)
+
+    expect(state.phase).toBe('turn-order-roll')
+    expect(state.roundNumber).toBe(1)
+    expect(state.turnOrder).toEqual(['p1', 'p2', 'p3'])
+    expect(state.turnOrderState?.queue).toEqual(['p1', 'p2', 'p3'])
+    expect(state.turnOrderState?.rolls).toEqual({})
+
+    // Solo el primero de la cola puede pedir su tirada.
+    expect(isGameError(reduce(state, { type: 'request-order-roll' }, 'p2'))).toBe(true)
+    // El valor solo lo puede aplicar el anfitrión.
+    state = reduce(state, { type: 'request-order-roll' }, 'p1') as CucupolyState
+    expect(
+      isGameError(
+        reduce(state, { type: 'roll-for-order', payload: { playerId: 'p1', value: 3 } }, 'p2'),
+      ),
+    ).toBe(true)
+    // Una tirada sin petición previa no se puede resolver.
+    expect(
+      isGameError(
+        reduce(
+          init(THREE, 7),
+          { type: 'roll-for-order', payload: { playerId: 'p2', value: 6 } },
+          'p1',
+        ),
+      ),
+    ).toBe(true)
+
+    state = orderRoll(init(THREE, 7), 'p1', 3)
+    state = orderRoll(state, 'p2', 6)
+    state = orderRoll(state, 'p3', 1)
+
+    expect(state.turnOrderState?.rolls).toEqual({ p1: 3, p2: 6, p3: 1 })
+    expect(state.turnOrder).toEqual(['p2', 'p1', 'p3'])
+    expect(state.phase).toBe('turn-order-reveal')
+    // El sorteo no consume el seed ni cuenta como ronda.
+    expect(state.seed).toBe(7)
+    expect(state.roundNumber).toBe(1)
+
+    // Solo el anfitrión cierra el sorteo y arranca la ronda 1.
+    expect(isGameError(reduce(state, { type: 'finish-turn-order' }, 'p2'))).toBe(true)
+    state = reduce(state, { type: 'finish-turn-order' }, 'p1') as CucupolyState
+    expect(state.phase).toBe('waiting-roll')
+    expect(state.turnOrderState).toBeNull()
+    expect(state.turnOrder).toEqual(['p2', 'p1', 'p3'])
+    expect(state.turnOrder[state.currentIndex]).toBe('p2')
+  })
+
+  it('en empate solo relanzan los empatados y los demás conservan su posición', () => {
+    let state = orderRoll(init(THREE, 7), 'p1', 6)
+    state = orderRoll(state, 'p2', 6)
+    state = orderRoll(state, 'p3', 3)
+
+    // p1 y p2 empatan arriba; p3 ya tiene su puesto fijo.
+    expect(state.phase).toBe('turn-order-roll')
+    expect(state.turnOrderState?.queue).toEqual(['p1', 'p2'])
+    expect(state.turnOrderState?.groups).toEqual([['p1', 'p2'], ['p3']])
+    expect(isGameError(reduce(state, { type: 'request-order-roll' }, 'p3'))).toBe(true)
+
+    state = orderRoll(state, 'p1', 2)
+    state = orderRoll(state, 'p2', 5)
+
+    expect(state.phase).toBe('turn-order-reveal')
+    expect(state.turnOrder).toEqual(['p2', 'p1', 'p3'])
+    expect(state.turnOrderState?.rolls).toEqual({ p1: 2, p2: 5, p3: 3 })
+    expect(state.turnOrderState?.queue).toEqual([])
+  })
+
+  it('el avance de turno y el evento de la ronda 2 usan el orden sorteado', () => {
+    let state = orderRoll(init(THREE, 99), 'p1', 3)
+    state = orderRoll(state, 'p2', 6)
+    state = orderRoll(state, 'p3', 1)
+    state = reduce(state, { type: 'finish-turn-order' }, 'p1') as CucupolyState
+
+    expect(state.turnOrder).toEqual(['p2', 'p1', 'p3'])
+    expect(state.turnOrder[state.currentIndex]).toBe('p2')
+
+    state = passTurn(state, 'p2')
+    expect(state.turnOrder[state.currentIndex]).toBe('p1')
+    expect(state.roundNumber).toBe(1)
+
+    state = passTurn(state, 'p1')
+    expect(state.turnOrder[state.currentIndex]).toBe('p3')
+    expect(state.roundNumber).toBe(1)
+
+    // Al cerrar el último turno vuelve al primero y arranca la ronda 2.
+    state = passTurn(state, 'p3')
+    expect(state.turnOrder[state.currentIndex]).toBe('p2')
+    expect(state.roundNumber).toBe(2)
+    expect(state.phase).toBe('event')
+
+    state = reduce(
+      state,
+      { type: 'start-initial-event', payload: { eventId: 'impulso_economico' } },
+      'p1',
+    ) as CucupolyState
+    expect(state.phase).toBe('waiting-roll')
+    expect(state.turnOrder[state.currentIndex]).toBe('p2')
   })
 })

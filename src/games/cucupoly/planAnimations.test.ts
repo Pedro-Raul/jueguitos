@@ -9,6 +9,8 @@ function makeState(overrides: Overrides = {}): CucupolyState {
     seed: 1,
     names: { p1: 'Ana', p2: 'Beto' },
     order: ['p1', 'p2'],
+    turnOrder: ['p1', 'p2'],
+    turnOrderState: null,
     currentIndex: 0,
     turnNumber: 0,
     roundNumber: 1,

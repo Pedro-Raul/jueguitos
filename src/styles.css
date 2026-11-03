@@ -694,6 +694,21 @@ button {
   color: var(--primary-dark);
 }
 
+.cp-roll-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 5px;
+  padding: 0 5px;
+  border-radius: 6px;
+  border: 1px solid #e2c185;
+  background: #f6e3bd;
+  color: #6b4b12;
+  font-size: 0.66rem;
+  font-weight: 900;
+  vertical-align: middle;
+}
+
 .cp-turnbanner {
   display: flex;
   flex-direction: column;
@@ -847,6 +862,46 @@ button {
 .cp-event-icon {
   font-size: clamp(2.2rem, 7vw, 3.4rem);
   line-height: 1;
+}
+
+/* Orden de turnos: lista del sorteo previo a la ronda 1. */
+.cp-turn-order-card {
+  min-width: min(88vw, 360px);
+}
+
+.cp-turn-order-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cp-turn-order-list li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.08);
+  font-weight: 800;
+  text-align: left;
+}
+
+.cp-turn-order-pos {
+  min-width: 1.6em;
+  color: #ffd166;
+}
+
+.cp-turn-order-list strong {
+  margin-left: auto;
+  padding: 0 7px;
+  border-radius: 6px;
+  background: #f6e3bd;
+  color: #6b4b12;
+  font-variant-numeric: tabular-nums;
 }
 
 .cp-event-overlay.is-leaving {

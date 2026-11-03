@@ -1,7 +1,13 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import type { GameAction, GameViewProps, Player } from '../../types'
 import { BOARD } from './board'
-import { AUCTION_NAMES, rentFor, type CucupolyState, type TradeState } from './engine'
+import {
+  AUCTION_NAMES,
+  TURN_ORDER_REVEAL_MS,
+  rentFor,
+  type CucupolyState,
+  type TradeState,
+} from './engine'
 import {
   EVENTS,
   EVENT_BANNER_EXIT_MS,
@@ -44,8 +50,16 @@ function nameOf(state: CucupolyState, id: string | null): string {
 
 function phaseHint(state: CucupolyState): string {
   switch (state.phase) {
+    case 'turn-order-roll': {
+      const roller = state.turnOrderState?.queue[0]
+      return roller
+        ? `${nameOf(state, roller)} lanza el dado para el orden.`
+        : 'Sorteando el orden de turnos…'
+    }
+    case 'turn-order-reveal':
+      return 'Orden de turnos definido.'
     case 'waiting-roll':
-      return `${nameOf(state, state.order[state.currentIndex])} debe tirar.`
+      return `${nameOf(state, state.turnOrder[state.currentIndex])} debe tirar.`
     case 'event':
       return 'Sorteando el evento inicial…'
     case 'buy-decision':
@@ -78,8 +92,12 @@ function phaseHint(state: CucupolyState): string {
 /** ¿Hay una decisión pendiente que solo puede resolver `meId`? */
 function mustAct(state: CucupolyState, meId: string): boolean {
   if (state.phase === 'finished') return false
-  const isMyTurn = state.order[state.currentIndex] === meId
+  const isMyTurn = state.turnOrder[state.currentIndex] === meId
   switch (state.phase) {
+    case 'turn-order-roll':
+      return state.turnOrderState?.queue[0] === meId
+    case 'turn-order-reveal':
+      return false
     case 'event':
       // El anfitrión sortea solo; nadie tiene una acción pendiente.
       return false
@@ -113,6 +131,10 @@ function mustAct(state: CucupolyState, meId: string): boolean {
 
 function actionIcon(state: CucupolyState): string {
   switch (state.phase) {
+    case 'turn-order-roll':
+      return '🎲'
+    case 'turn-order-reveal':
+      return '🏁'
     case 'buy-decision':
       return '🏷️'
     case 'auction':
@@ -130,6 +152,10 @@ function actionIcon(state: CucupolyState): string {
 
 function actionTitle(state: CucupolyState, me: Player): string {
   switch (state.phase) {
+    case 'turn-order-roll':
+      return 'Sorteo del orden de turnos'
+    case 'turn-order-reveal':
+      return 'Orden de turnos'
     case 'buy-decision':
       return 'Comprar o subastar'
     case 'auction':
@@ -179,12 +205,42 @@ function ActionPanel({ state, me, dispatch }: PanelProps) {
   const [giveMoney, setGiveMoney] = useState('')
   const [getMoney, setGetMoney] = useState('')
 
-  const current = state.order[state.currentIndex]
+  const current = state.turnOrder[state.currentIndex]
   const isMyTurn = current === me.id
   const myMoney = state.money[me.id] ?? 0
 
   if (state.phase === 'finished') {
     return <p className="cp-banner">Gana {nameOf(state, state.winner)}.</p>
+  }
+
+  if (state.phase === 'turn-order-roll' && state.turnOrderState) {
+    const sorteo = state.turnOrderState
+    const roller = sorteo.queue[0]
+    if (roller !== me.id) {
+      return <p className="muted">Esperando a {nameOf(state, roller)}…</p>
+    }
+    return (
+      <div className="cp-action">
+        <p>Lanza un dado para decidir el orden de turnos.</p>
+        <div className="actions">
+          <button
+            className="primary"
+            type="button"
+            disabled={sorteo.request !== null}
+            onClick={() => dispatch({ type: 'request-order-roll' })}
+          >
+            {sorteo.request === me.id ? 'Lanzando…' : 'Lanzar dado'}
+          </button>
+        </div>
+        <p className="muted small">
+          El número más alto juega primero. Los empates relanzan solo entre ellos.
+        </p>
+      </div>
+    )
+  }
+
+  if (state.phase === 'turn-order-reveal') {
+    return <p className="muted">El orden de turnos ya está definido.</p>
   }
 
   if (state.phase === 'auction' && state.auction) {
@@ -703,7 +759,10 @@ export function CucupolyView({ state, me, players, dispatch }: GameViewProps<Cuc
   const seenRoll = useRef<SeenRoll | null>(null)
   const seenEventSeq = useRef(0)
 
-  const current = state.order[state.currentIndex]
+  const current =
+    state.phase === 'turn-order-roll' && state.turnOrderState
+      ? state.turnOrderState.queue[0] ?? state.turnOrder[0]
+      : state.turnOrder[state.currentIndex]
   const modifier =
     state.diceModifier &&
     state.turnNumber >= state.diceModifier.from &&
@@ -761,6 +820,24 @@ export function CucupolyView({ state, me, players, dispatch }: GameViewProps<Cuc
     }, AUCTION_TICK_MS)
     return () => window.clearTimeout(timer)
   }, [isHost, openAuction, auctionCountdown, auctionLeader, dispatch])
+
+  // Sorteo de orden: el jugador pide su tirada y el anfitrión genera el valor
+  // fuera del reducer. El estado solo guarda el número ya decidido.
+  const orderRequest = state.turnOrderState?.request ?? null
+  useEffect(() => {
+    if (!isHost || state.phase !== 'turn-order-roll' || !orderRequest) return
+    const value = 1 + Math.floor(Math.random() * 6)
+    dispatch({ type: 'roll-for-order', payload: { playerId: orderRequest, value } })
+  }, [isHost, state.phase, orderRequest, dispatch])
+
+  // Tras mostrar el orden final durante TURN_ORDER_REVEAL_MS, empieza la ronda 1.
+  useEffect(() => {
+    if (!isHost || state.phase !== 'turn-order-reveal') return
+    const timer = window.setTimeout(() => {
+      dispatch({ type: 'finish-turn-order' })
+    }, TURN_ORDER_REVEAL_MS)
+    return () => window.clearTimeout(timer)
+  }, [isHost, state.phase, dispatch])
 
   // Ofertas secretas: solo el anfitrión conoce los importes. Viven en un ref
   // para que nunca entren al estado que se difunde a los invitados.
@@ -918,6 +995,27 @@ export function CucupolyView({ state, me, players, dispatch }: GameViewProps<Cuc
         </div>
       ) : null}
 
+      {state.phase === 'turn-order-reveal' && state.turnOrderState ? (
+        <div className="cp-event-overlay" role="status" aria-live="assertive">
+          <div className="cp-event-card cp-turn-order-card">
+            <span className="cp-event-icon" aria-hidden="true">
+              🎲
+            </span>
+            <span className="cp-eyebrow">Orden de turnos</span>
+            <h2>¡A jugar!</h2>
+            <ol className="cp-turn-order-list">
+              {state.turnOrder.map((id, index) => (
+                <li key={id}>
+                  <span className="cp-turn-order-pos">{index + 1}.</span>
+                  <span>{nameOf(state, id)}</span>
+                  <strong>{state.turnOrderState?.rolls[id] ?? '—'}</strong>
+                </li>
+              ))}
+            </ol>
+          </div>
+        </div>
+      ) : null}
+
       {state.phase === 'finished' ? (
         <div className="cp-winner" role="status">
           <span className="cp-winner-emoji" aria-hidden="true">
@@ -932,6 +1030,7 @@ export function CucupolyView({ state, me, players, dispatch }: GameViewProps<Cuc
           {state.order.map((id) => {
             const player = players.find((candidate) => candidate.id === id)
             const out = state.bankrupt.includes(id)
+            const rolled = state.turnOrderState?.rolls[id]
             return (
               <article
                 key={id}
@@ -944,6 +1043,11 @@ export function CucupolyView({ state, me, players, dispatch }: GameViewProps<Cuc
                   <span className="cp-pname">
                     {nameOf(state, id)}
                     {id === me.id ? ' (tú)' : ''}
+                    {rolled !== undefined ? (
+                      <span className="cp-roll-chip" aria-label={`dado ${rolled}`}>
+                        🎲 {rolled}
+                      </span>
+                    ) : null}
                   </span>
                   <span className="cp-pmoney">
                     {out ? 'eliminado' : money(state.money[id] ?? 0)}
@@ -956,7 +1060,9 @@ export function CucupolyView({ state, me, players, dispatch }: GameViewProps<Cuc
 
         <div className="cp-turnbanner" role="status">
           <span className="cp-eyebrow">
-            Ronda {state.roundNumber} · Turno {state.turnNumber + 1}
+            {state.phase === 'turn-order-roll' || state.phase === 'turn-order-reveal'
+              ? 'Sorteo del orden de turnos'
+              : `Ronda ${state.roundNumber} · Turno ${state.turnNumber + 1}`}
           </span>
           <strong>{nameOf(state, current)}</strong>
           <span className="cp-phase">{statusHint}</span>
@@ -990,7 +1096,9 @@ export function CucupolyView({ state, me, players, dispatch }: GameViewProps<Cuc
               </span>
               <div>
                 <span className="cp-eyebrow">
-                  Ronda {state.roundNumber} · Turno {state.turnNumber + 1}
+                  {state.phase === 'turn-order-roll' || state.phase === 'turn-order-reveal'
+                    ? 'Sorteo del orden de turnos'
+                    : `Ronda ${state.roundNumber} · Turno ${state.turnNumber + 1}`}
                 </span>
                 <h2>{actionTitle(state, me)}</h2>
               </div>
