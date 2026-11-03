@@ -10,7 +10,7 @@ const cucupoly: GameDefinition<CucupolyState> = {
   id: 'cucupoly',
   name: 'Cucupoly',
   description:
-    'Monopoly cucuteño de 48 casillas con subasta inicial, mesa de 31, busetas y habilidades de servicios.',
+    'Monopoly cucuteño de 48 casillas con eventos que cambian la partida, mesa de 31, busetas y habilidades de servicios.',
   minPlayers: 2,
   maxPlayers: 6,
   init,

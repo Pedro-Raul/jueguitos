@@ -1,7 +1,19 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import type { GameAction, GameViewProps, Player } from '../../types'
 import { BOARD } from './board'
-import { rentFor, type CucupolyState, type TradeState } from './engine'
+import { AUCTION_NAMES, rentFor, type CucupolyState, type TradeState } from './engine'
+import {
+  EVENTS,
+  EVENT_BANNER_EXIT_MS,
+  EVENT_BANNER_MS,
+  INITIAL_EVENT_POOL,
+  discountRoundsLeft,
+  hasSeenEvent,
+  isDiscountActive,
+  markEventSeen,
+  purchasePriceFor,
+  type InitialEventId,
+} from './events'
 import { planAnimations, snapshotSeen, type RollPlan, type SeenRoll } from './planAnimations'
 import { DICE_SECONDS } from './three/layout'
 import { RULES } from './rules.config'
@@ -27,12 +39,21 @@ function phaseHint(state: CucupolyState): string {
   switch (state.phase) {
     case 'waiting-roll':
       return `${nameOf(state, state.order[state.currentIndex])} debe tirar.`
+    case 'event':
+      return 'Sorteando el evento inicial…'
     case 'buy-decision':
       return state.pendingBuy === null
         ? 'Decisión de compra.'
         : `¿Comprar ${BOARD[state.pendingBuy].name}?`
-    case 'auction':
-      return state.auction ? `Subasta de ${BOARD[state.auction.tileId].name}.` : 'Subasta.'
+    case 'auction': {
+      const auction = state.auction
+      if (!auction) return 'Subasta.'
+      const name = AUCTION_NAMES[auction.mode]
+      if (auction.mode === 'open') {
+        return `${name}: ${BOARD[auction.tileId].name} · cierra en ${auction.countdown}.`
+      }
+      return `${name} de ${BOARD[auction.tileId].name}.`
+    }
     case 'thirty-one':
       return 'Mesa de 31 en curso.'
     case 'trade':
@@ -51,8 +72,15 @@ function mustAct(state: CucupolyState, meId: string): boolean {
   if (state.phase === 'finished') return false
   const isMyTurn = state.order[state.currentIndex] === meId
   switch (state.phase) {
+    case 'event':
+      // El anfitrión sortea solo; nadie tiene una acción pendiente.
+      return false
     case 'auction':
-      return state.auction?.pending.includes(meId) ?? false
+      if (!state.auction) return false
+      // En la relámpago todos ven el contador y pueden mejorar la puja.
+      return state.auction.mode === 'open'
+        ? !state.bankrupt.includes(meId)
+        : state.auction.pending.includes(meId)
     case 'buy-decision':
     case 'bus-move':
     case 'waiting-roll':
@@ -80,7 +108,7 @@ function actionIcon(state: CucupolyState): string {
     case 'buy-decision':
       return '🏷️'
     case 'auction':
-      return '🔨'
+      return state.auction?.mode === 'open' ? '⚡' : '🔨'
     case 'thirty-one':
       return '🃏'
     case 'trade':
@@ -97,7 +125,7 @@ function actionTitle(state: CucupolyState, me: Player): string {
     case 'buy-decision':
       return 'Comprar o subastar'
     case 'auction':
-      return 'Subasta'
+      return state.auction ? AUCTION_NAMES[state.auction.mode] : 'Subasta'
     case 'thirty-one':
       return 'Mesa de 31'
     case 'trade':
@@ -153,12 +181,75 @@ function ActionPanel({ state, me, dispatch }: PanelProps) {
 
   if (state.phase === 'auction' && state.auction) {
     const auction = state.auction
+    const tileName = BOARD[auction.tileId].name
+    const eventLabel = auction.initial ? '¡Evento sorpresa!' : 'Subasta'
+
+    if (auction.mode === 'open') {
+      const leading = auction.leader === me.id
+      const floor = auction.leader ? auction.leaderBid + 1 : auction.minBid
+      const amount = bid === '' ? floor : Number(bid)
+      const valid =
+        Number.isInteger(amount) && amount >= floor && amount <= myMoney
+      return (
+        <div className="cp-action">
+          <p className="cp-auction-event">
+            <span className="cp-eyebrow">{eventLabel}</span>{' '}
+            <strong>{AUCTION_NAMES.open}</strong> por <strong>{tileName}</strong>.
+          </p>
+          <p>
+            {auction.leader
+              ? `Mejor puja: ${money(auction.leaderBid)} de ${nameOf(state, auction.leader)}.`
+              : `Puja mínima: ${money(auction.minBid)}.`}
+          </p>
+          <div className="cp-countdown" role="timer" aria-live="polite">
+            <span>{leading ? 'Vas ganando' : 'Cierra en'}</span>
+            <strong>{auction.countdown}</strong>
+            <span className="cp-countdown-dots" aria-hidden="true">
+              {Array.from({ length: RULES.openAuctionCountdown }, (_, index) => (
+                <i key={index} className={index < auction.countdown ? 'is-on' : ''} />
+              ))}
+            </span>
+          </div>
+          {leading ? (
+            <p className="muted small">
+              Si nadie supera tu puja, te llevas la propiedad.
+            </p>
+          ) : (
+            <>
+              <input
+                type="number"
+                min={floor}
+                max={myMoney}
+                value={bid}
+                placeholder={String(floor)}
+                onChange={(event) => setBid(event.target.value)}
+              />
+              <div className="actions">
+                <button
+                  className="primary"
+                  type="button"
+                  disabled={!valid}
+                  onClick={() => {
+                    dispatch({ type: 'bid', payload: { amount } })
+                    setBid('')
+                  }}
+                >
+                  Pujar {money(amount)}
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      )
+    }
+
     const waiting = auction.pending.includes(me.id)
     return (
       <div className="cp-action">
-        <p>
-          Subasta de <strong>{BOARD[auction.tileId].name}</strong> desde{' '}
-          {money(auction.minBid)}.
+        <p className="cp-auction-event">
+          <span className="cp-eyebrow">{eventLabel}</span>{' '}
+          <strong>{AUCTION_NAMES.sealed}</strong> por <strong>{tileName}</strong>{' '}
+          desde {money(auction.minBid)}.
         </p>
         {waiting ? (
           <>
@@ -205,13 +296,17 @@ function ActionPanel({ state, me, dispatch }: PanelProps) {
 
   if (state.phase === 'buy-decision' && state.pendingBuy !== null) {
     const tile = BOARD[state.pendingBuy]
+    const price = purchasePriceFor(tile.price ?? 0, state.initialEvent, state.roundNumber)
     if (!isMyTurn) {
       return <p className="muted">Esperando a {nameOf(state, current)}…</p>
     }
     return (
       <div className="cp-action">
         <p>
-          ¿Compras <strong>{tile.name}</strong> por {money(tile.price ?? 0)}?
+          ¿Compras <strong>{tile.name}</strong> por {money(price)}?
+          {price !== (tile.price ?? 0) ? (
+            <span className="cp-price-was"> antes {money(tile.price ?? 0)}</span>
+          ) : null}
         </p>
         <div className="actions">
           <button className="primary" type="button" onClick={() => dispatch({ type: 'buy' })}>
@@ -498,6 +593,14 @@ function TileSheet({
   const ownerId = state.owners[index] ?? null
   const owner = ownerId ? players.find((player) => player.id === ownerId) : undefined
   const rent = ownerId && isPurchasable(tile) ? rentFor(state, index, state.dice?.total ?? 7) : null
+  // Mismo cálculo que `handleBuy`: lo mostrado y lo cobrado no pueden divergir.
+  const purchasePrice =
+    tile.price === undefined
+      ? null
+      : ownerId === null
+        ? purchasePriceFor(tile.price, state.initialEvent, state.roundNumber)
+        : tile.price
+  const discounted = purchasePrice !== null && purchasePrice !== tile.price
 
   return (
     <div className="cp-sheet-backdrop" role="presentation" onClick={onClose}>
@@ -523,10 +626,15 @@ function TileSheet({
             <dt>Grupo</dt>
             <dd>{groupNameFor(tile)}</dd>
           </div>
-          {tile.price !== undefined ? (
+          {purchasePrice !== null ? (
             <div>
               <dt>Precio</dt>
-              <dd>{money(tile.price)}</dd>
+              <dd>
+                {money(purchasePrice)}
+                {discounted ? (
+                  <span className="cp-price-was"> antes {money(tile.price ?? 0)}</span>
+                ) : null}
+              </dd>
             </div>
           ) : null}
           {rent !== null ? (
@@ -567,7 +675,10 @@ export function CucupolyView({ state, me, players, dispatch }: GameViewProps<Cuc
   const [play, setPlay] = useState<RollPlan | null>(null)
   const [diceBlocked, setDiceBlocked] = useState(false)
   const [banner, setBanner] = useState<string | null>(null)
+  const [eventBanner, setEventBanner] = useState<InitialEventId | null>(null)
+  const [eventLeaving, setEventLeaving] = useState(false)
   const seenRoll = useRef<SeenRoll | null>(null)
+  const seenEventSeq = useRef(0)
 
   const current = state.order[state.currentIndex]
   const modifier =
@@ -610,6 +721,56 @@ export function CucupolyView({ state, me, players, dispatch }: GameViewProps<Cuc
     }
   }, [play])
 
+  // El anfitrión mueve el reloj de la subasta relámpago. Cada tic produce un
+  // snapshot; el temporizador se reprograma al cambiar el contador o la puja,
+  // así una mejora siempre regala los 5 tics completos.
+  const isHost = state.order[0] === me.id
+  const openAuction =
+    state.phase === 'auction' && state.auction?.mode === 'open'
+  const auctionCountdown = state.auction?.countdown ?? 0
+  const auctionLeader = state.auction?.leader ?? null
+
+  useEffect(() => {
+    if (!isHost || !openAuction) return
+    const timer = window.setTimeout(() => {
+      dispatch({ type: 'auction-tick' })
+    }, RULES.openAuctionTickMs)
+    return () => window.clearTimeout(timer)
+  }, [isHost, openAuction, auctionCountdown, auctionLeader, dispatch])
+
+  // El anfitrión sortea el evento inicial FUERA del reducer y lo aplica como
+  // acción; así el reducer sigue siendo puro y determinista.
+  useEffect(() => {
+    if (!isHost || state.phase !== 'event' || state.initialEvent !== null) return
+    const eventId =
+      INITIAL_EVENT_POOL[Math.floor(Math.random() * INITIAL_EVENT_POOL.length)]
+    dispatch({ type: 'start-initial-event', payload: { eventId } })
+  }, [isHost, state.phase, state.initialEvent, dispatch])
+
+  // Anuncio del evento inicial: se dispara con `eventSeq` una sola vez por
+  // cliente. `sessionStorage` evita repetirlo al reconectar o recargar.
+  useEffect(() => {
+    const seq = state.eventSeq
+    const eventId = state.initialEvent
+    if (!eventId || seq <= 0) return
+    if (seenEventSeq.current >= seq) return
+    seenEventSeq.current = seq
+    if (hasSeenEvent(state.seed, seq)) return
+
+    markEventSeen(state.seed, seq)
+    setEventBanner(eventId)
+    setEventLeaving(false)
+    const leave = window.setTimeout(() => setEventLeaving(true), EVENT_BANNER_MS)
+    const clear = window.setTimeout(() => {
+      setEventBanner(null)
+      setEventLeaving(false)
+    }, EVENT_BANNER_MS + EVENT_BANNER_EXIT_MS)
+    return () => {
+      window.clearTimeout(leave)
+      window.clearTimeout(clear)
+    }
+  }, [state.eventSeq, state.initialEvent, state.seed])
+
   const roll = play
     ? { values: play.values, total: play.total, seq: play.seq }
     : null
@@ -643,6 +804,23 @@ export function CucupolyView({ state, me, players, dispatch }: GameViewProps<Cuc
       {banner ? (
         <div className="cp-dice-banner" aria-live="polite">
           {banner}
+        </div>
+      ) : null}
+
+      {eventBanner ? (
+        <div
+          className={`cp-event-overlay${eventLeaving ? ' is-leaving' : ''}`}
+          role="status"
+          aria-live="assertive"
+        >
+          <div className="cp-event-card">
+            <span className="cp-event-icon" aria-hidden="true">
+              {EVENTS[eventBanner].icon}
+            </span>
+            <span className="cp-eyebrow">Evento inicial</span>
+            <h2>{EVENTS[eventBanner].name}</h2>
+            <p>{EVENTS[eventBanner].description}</p>
+          </div>
         </div>
       ) : null}
 
@@ -683,10 +861,18 @@ export function CucupolyView({ state, me, players, dispatch }: GameViewProps<Cuc
         </div>
 
         <div className="cp-turnbanner" role="status">
-          <span className="cp-eyebrow">Turno {state.turnNumber + 1}</span>
+          <span className="cp-eyebrow">
+            Ronda {state.roundNumber} · Turno {state.turnNumber + 1}
+          </span>
           <strong>{nameOf(state, current)}</strong>
           <span className="cp-phase">{statusHint}</span>
           {modifier ? <span className="cp-badge">🎲 {modifier.dice} dado(s)</span> : null}
+          {isDiscountActive(state.initialEvent, state.roundNumber) ? (
+            <span className="cp-badge cp-badge-discount">
+              🏷️ Semana de descuentos: quedan {discountRoundsLeft(state.roundNumber)}{' '}
+              {discountRoundsLeft(state.roundNumber) === 1 ? 'ronda' : 'rondas'}
+            </span>
+          ) : null}
         </div>
 
         {!acting && state.phase !== 'finished' ? (
@@ -709,7 +895,9 @@ export function CucupolyView({ state, me, players, dispatch }: GameViewProps<Cuc
                 {actionIcon(state)}
               </span>
               <div>
-                <span className="cp-eyebrow">Turno {state.turnNumber + 1}</span>
+                <span className="cp-eyebrow">
+                  Ronda {state.roundNumber} · Turno {state.turnNumber + 1}
+                </span>
                 <h2>{actionTitle(state, me)}</h2>
               </div>
             </header>

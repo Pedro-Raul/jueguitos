@@ -9,6 +9,7 @@ import {
   rentFor,
   type CucupolyState,
 } from './engine'
+import { EVENTS, EVENT_BANNER_MS, INITIAL_EVENT_POOL, purchasePriceFor } from './events'
 import { RULES } from './rules.config'
 
 const ANA: Player = { id: 'p1', name: 'Ana', emoji: '🐙', color: '#e11d48', connected: true }
@@ -17,14 +18,23 @@ const CARO: Player = { id: 'p3', name: 'Caro', emoji: '🐸', color: '#16a34a', 
 const TWO = [ANA, BETO]
 const THREE = [ANA, BETO, CARO]
 
-/** Estado limpio: resuelve la subasta inicial haciendo que todos pasen. */
+/**
+ * Estado limpio para aislar la regla bajo prueba. `init` arranca sin evento
+ * inicial; los tests de eventos lo aplican explícitamente.
+ */
 function fresh(players: Player[] = TWO, seed = 7): CucupolyState {
-  let state = init(players, seed)
-  while (state.phase === 'auction' && state.auction) {
-    const id = state.auction.pending[0]
-    state = reduce(state, { type: 'bid', payload: { amount: 0 } }, id) as CucupolyState
+  return init(players, seed)
+}
+
+/** Cierra un turno sin tirar dados: declina una compra ficticia. */
+function passTurn(state: CucupolyState, playerId: string): CucupolyState {
+  const staged: CucupolyState = {
+    ...state,
+    phase: 'buy-decision',
+    pendingBuy: 1,
+    currentIndex: state.order.indexOf(playerId),
   }
-  return state
+  return reduce(staged, { type: 'decline' }, playerId) as CucupolyState
 }
 
 /** Primer seed cuyo dado (1..6) da `target`. */
@@ -82,45 +92,166 @@ describe('tablero', () => {
   })
 })
 
-describe('evento: subasta sorpresa inicial', () => {
-  it('saca una propiedad al 75% y cobra la puja ganadora', () => {
-    const state = init(TWO, 99)
-    expect(state.phase).toBe('auction')
-    const auction = state.auction
-    expect(auction).not.toBeNull()
-    const tile = BOARD[auction!.tileId]
-    expect(tile.type).toBe('property')
-    expect(auction!.minBid).toBe(Math.round((tile.price ?? 0) * RULES.auctionStartRate))
+describe('evento inicial: ronda 2', () => {
+  it('se dispara exactamente una vez, solo al empezar la ronda 2', () => {
+    let state = fresh(TWO, 99)
+    expect(state.initialEvent).toBeNull()
+    expect(state.eventSeq).toBe(0)
+    expect(state.phase).toBe('waiting-roll')
 
-    let after = reduce(state, { type: 'bid', payload: { amount: auction!.minBid } }, 'p1')
-    expect(isGameError(after)).toBe(false)
-    after = reduce(after as CucupolyState, { type: 'bid', payload: { amount: 0 } }, 'p2')
+    // Ronda 1: no hay evento.
+    state = passTurn(state, 'p1')
+    expect(state.roundNumber).toBe(1)
+    expect(state.phase).toBe('waiting-roll')
 
-    const resolved = after as CucupolyState
-    expect(resolved.phase).toBe('waiting-roll')
-    expect(resolved.owners[auction!.tileId]).toBe('p1')
-    expect(resolved.money.p1).toBe(RULES.startingMoney - auction!.minBid)
-  })
+    // Al cerrar la ronda 1 y empezar la 2 se abre la fase de evento.
+    state = passTurn(state, 'p2')
+    expect(state.roundNumber).toBe(2)
+    expect(state.phase).toBe('event')
+    expect(state.initialEvent).toBeNull()
 
-  it('deja la propiedad sin dueño si todos pasan', () => {
-    const state = init(TWO, 99)
-    const tileId = state.auction!.tileId
-    let after = reduce(state, { type: 'bid', payload: { amount: 0 } }, 'p1') as CucupolyState
-    after = reduce(after, { type: 'bid', payload: { amount: 0 } }, 'p2') as CucupolyState
+    // Nadie puede tirar hasta que el anfitrión aplique el evento.
+    expect(isGameError(reduce(state, { type: 'roll' }, 'p1'))).toBe(true)
+    // Solo el anfitrión (primer asiento) puede sortearlo.
+    expect(
+      isGameError(
+        reduce(state, { type: 'start-initial-event', payload: { eventId: 'impulso_economico' } }, 'p2'),
+      ),
+    ).toBe(true)
+    // Un id fuera del catálogo se rechaza.
+    expect(
+      isGameError(
+        reduce(state, { type: 'start-initial-event', payload: { eventId: 'oferta_secreta' } }, 'p1'),
+      ),
+    ).toBe(true)
 
-    expect(after.phase).toBe('waiting-roll')
-    expect(after.owners[tileId]).toBeUndefined()
-    expect(after.money.p1).toBe(RULES.startingMoney)
-  })
-
-  it('rechaza pujas por debajo del mínimo', () => {
-    const state = init(TWO, 99)
-    const result = reduce(
+    state = reduce(
       state,
-      { type: 'bid', payload: { amount: state.auction!.minBid - 1 } },
+      { type: 'start-initial-event', payload: { eventId: 'impulso_economico' } },
       'p1',
-    )
-    expect(isGameError(result)).toBe(true)
+    ) as CucupolyState
+    expect(state.initialEvent).toBe('impulso_economico')
+    expect(state.eventSeq).toBe(1)
+    expect(state.phase).toBe('waiting-roll')
+
+    // No se puede repetir ni cambiar el evento.
+    expect(
+      isGameError(
+        reduce(state, { type: 'start-initial-event', payload: { eventId: 'semana_descuentos' } }, 'p1'),
+      ),
+    ).toBe(true)
+
+    // Rondas 3 y 4: la fase de evento no vuelve a abrirse.
+    state = passTurn(state, 'p1')
+    state = passTurn(state, 'p2')
+    expect(state.roundNumber).toBe(3)
+    expect(state.phase).toBe('waiting-roll')
+    expect(state.eventSeq).toBe(1)
+
+    state = passTurn(state, 'p1')
+    state = passTurn(state, 'p2')
+    expect(state.roundNumber).toBe(4)
+    expect(state.phase).toBe('waiting-roll')
+    expect(state.eventSeq).toBe(1)
+  })
+
+  it('Impulso Económico: +$250 a cada jugador activo, una sola vez', () => {
+    const base = fresh(THREE, 99)
+    base.bankrupt.push('p3')
+    base.money.p3 = 0
+
+    let state = passTurn(base, 'p1')
+    state = passTurn(state, 'p2')
+    expect(state.roundNumber).toBe(2)
+    expect(state.phase).toBe('event')
+
+    const before = { ...state.money }
+    state = reduce(
+      state,
+      { type: 'start-initial-event', payload: { eventId: 'impulso_economico' } },
+      'p1',
+    ) as CucupolyState
+
+    expect(state.money.p1).toBe(before.p1 + RULES.initialEventBoost)
+    expect(state.money.p2).toBe(before.p2 + RULES.initialEventBoost)
+    expect(state.money.p3).toBe(0) // eliminado: no cobra
+    expect(state.eventSeq).toBe(1)
+    expect(state.log.some((entry) => entry.text.includes('Impulso Económico'))).toBe(true)
+
+    // Un segundo intento no vuelve a repartir dinero.
+    expect(
+      isGameError(
+        reduce(state, { type: 'start-initial-event', payload: { eventId: 'impulso_economico' } }, 'p1'),
+      ),
+    ).toBe(true)
+    expect(state.money.p1).toBe(before.p1 + RULES.initialEventBoost)
+  })
+
+  it('Semana de descuentos: mitad de precio solo en las rondas 3, 4 y 5', () => {
+    expect(purchasePriceFor(100, 'semana_descuentos', 2)).toBe(100)
+    expect(purchasePriceFor(100, 'semana_descuentos', 3)).toBe(50)
+    expect(purchasePriceFor(100, 'semana_descuentos', 4)).toBe(50)
+    expect(purchasePriceFor(100, 'semana_descuentos', 5)).toBe(50)
+    expect(purchasePriceFor(100, 'semana_descuentos', 6)).toBe(100)
+    expect(purchasePriceFor(100, 'impulso_economico', 3)).toBe(100)
+    expect(purchasePriceFor(100, null, 3)).toBe(100)
+    // Redondeo a entero.
+    expect(purchasePriceFor(75, 'semana_descuentos', 3)).toBe(38)
+  })
+
+  it('Semana de descuentos: el cobro coincide con el precio mostrado', () => {
+    const basePrice = BOARD[1].price ?? 0
+    const discounted = purchasePriceFor(basePrice, 'semana_descuentos', 3)
+
+    const state = fresh(TWO, 99)
+    state.initialEvent = 'semana_descuentos'
+    state.roundNumber = 3
+    state.phase = 'buy-decision'
+    state.pendingBuy = 1
+    state.currentIndex = 0
+
+    const after = reduce(state, { type: 'buy' }, 'p1') as CucupolyState
+    expect(after.owners[1]).toBe('p1')
+    expect(after.money.p1).toBe(RULES.startingMoney - discounted)
+    expect(after.money.p1).toBe(RULES.startingMoney - Math.round(basePrice / 2))
+  })
+
+  it('Semana de descuentos: en la ronda 6 vuelve a cobrar el precio completo', () => {
+    const basePrice = BOARD[1].price ?? 0
+    const state = fresh(TWO, 99)
+    state.initialEvent = 'semana_descuentos'
+    state.roundNumber = 6
+    state.phase = 'buy-decision'
+    state.pendingBuy = 1
+    state.currentIndex = 0
+
+    const after = reduce(state, { type: 'buy' }, 'p1') as CucupolyState
+    expect(after.money.p1).toBe(RULES.startingMoney - basePrice)
+  })
+})
+
+describe('catálogo de eventos', () => {
+  it('solo incluye los dos eventos de esta fase', () => {
+    expect(INITIAL_EVENT_POOL).toEqual(['impulso_economico', 'semana_descuentos'])
+    expect(Object.keys(EVENTS).sort()).toEqual([...INITIAL_EVENT_POOL].sort())
+    for (const id of INITIAL_EVENT_POOL) {
+      expect(EVENTS[id].name.length).toBeGreaterThan(0)
+      expect(EVENTS[id].description.length).toBeGreaterThan(0)
+    }
+    expect(EVENT_BANNER_MS).toBeGreaterThanOrEqual(5000)
+  })
+})
+
+describe('contador de rondas', () => {
+  it('sube cuando el turno vuelve a empezar', () => {
+    let state = fresh(TWO, 99)
+    expect(state.roundNumber).toBe(1)
+
+    state = passTurn(state, 'p1')
+    expect(state.roundNumber).toBe(1)
+
+    state = passTurn(state, 'p2')
+    expect(state.roundNumber).toBe(2)
   })
 })
 
@@ -179,6 +310,8 @@ describe('habilidad Ser. Luz: Apagón', () => {
     state.seed = seedForDie(1)
     state.diceModifier = { from: 0, until: 2, dice: 1 }
     state.positions.p2 = 0 // con un dado de 1 cae en Fortaleza ($60)
+    // El evento inicial ya ocurrió: aquí solo se prueba la habilidad.
+    state.initialEvent = 'impulso_economico'
 
     const after = reduce(state, { type: 'roll' }, 'p2') as CucupolyState
     expect(after.phase).toBe('waiting-roll')
@@ -485,13 +618,15 @@ describe('movimiento con 1 y 3 dados', () => {
     const state = fresh()
     state.diceModifier = { from: 0, until: 1, dice: 3 }
     state.currentIndex = 0
-    state.positions.p1 = 10
+    // Cae en Fortaleza (sin dueño) para conservar los dados en la decisión.
+    const { total } = rollOutcome(state.seed, 3)
+    state.positions.p1 = (1 - total + 48) % 48
 
     const after = reduce(state, { type: 'roll' }, 'p1') as CucupolyState
     expect(after.dice!.values).toHaveLength(3)
     expect(after.dice!.total).toBeGreaterThanOrEqual(3)
     expect(after.dice!.total).toBeLessThanOrEqual(18)
-    expect(after.positions.p1).toBe((10 + after.dice!.total) % 48)
+    expect(after.positions.p1).toBe(1)
   })
 })
 

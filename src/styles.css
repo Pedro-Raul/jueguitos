@@ -790,6 +790,128 @@ button {
   }
 }
 
+/* Anuncio del evento inicial: overlay HTML a pantalla completa.
+   `pointer-events: none` mantiene la partida operable mientras se ve. */
+
+.cp-event-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: radial-gradient(
+    circle at 50% 45%,
+    rgba(12, 24, 17, 0.55),
+    rgba(6, 12, 9, 0.82)
+  );
+  pointer-events: none;
+  animation: cp-event-fade-in 220ms ease-out;
+}
+
+.cp-event-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  max-width: min(92vw, 540px);
+  padding: 28px 34px 30px;
+  border-radius: 24px;
+  border: 3px solid rgba(255, 209, 102, 0.9);
+  background: rgba(12, 24, 17, 0.94);
+  color: #f7f1e2;
+  text-align: center;
+  box-shadow: 0 12px 0 rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(6px);
+  animation: cp-event-pop 260ms cubic-bezier(0.2, 0.9, 0.3, 1.3);
+}
+
+.cp-event-card .cp-eyebrow {
+  color: #ffd166;
+}
+
+.cp-event-card h2 {
+  margin: 0;
+  font-size: clamp(1.6rem, 5vw, 2.6rem);
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+}
+
+.cp-event-card p {
+  margin: 0;
+  font-size: clamp(0.9rem, 2.4vw, 1.05rem);
+  font-weight: 700;
+  color: rgba(247, 241, 226, 0.86);
+}
+
+.cp-event-icon {
+  font-size: clamp(2.2rem, 7vw, 3.4rem);
+  line-height: 1;
+}
+
+.cp-event-overlay.is-leaving {
+  animation: cp-event-fade-out 400ms ease-in forwards;
+}
+
+.cp-event-overlay.is-leaving .cp-event-card {
+  animation: cp-event-pop-out 400ms ease-in forwards;
+}
+
+@keyframes cp-event-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes cp-event-fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes cp-event-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.82) translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes cp-event-pop-out {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.94) translateY(-10px);
+  }
+}
+
+/* Precio tachado cuando la Semana de descuentos está activa. */
+
+.cp-price-was {
+  font-size: 0.72em;
+  font-weight: 700;
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.cp-badge-discount {
+  background: #d9f2e0;
+  border-color: #9ed7ae;
+  color: #1c5c31;
+}
+
 .cp-dock {
   width: max-content;
   max-width: 100%;
@@ -950,6 +1072,52 @@ button {
 
 .cp-action input[type='number'] {
   max-width: 220px;
+}
+
+.cp-auction-event {
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 2px solid #e8c98a;
+  background: #fff6e3;
+}
+
+.cp-auction-event .cp-eyebrow {
+  color: #8a5a00;
+}
+
+.cp-countdown {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: #12271c;
+  color: #f7f1e2;
+  font-weight: 800;
+}
+
+.cp-countdown strong {
+  font-size: 1.6rem;
+  line-height: 1;
+  color: #ffd166;
+  font-variant-numeric: tabular-nums;
+}
+
+.cp-countdown-dots {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.cp-countdown-dots i {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.cp-countdown-dots i.is-on {
+  background: #ffd166;
 }
 
 .cp-banner {

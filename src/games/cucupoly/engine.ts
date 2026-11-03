@@ -8,9 +8,16 @@ import {
   WATER_TILE,
 } from './board'
 import { RULES } from './rules.config'
+import {
+  INITIAL_EVENT_ROUND,
+  isInitialEventId,
+  purchasePriceFor,
+  type InitialEventId,
+} from './events'
 
 export type Phase =
   | 'waiting-roll'
+  | 'event'
   | 'buy-decision'
   | 'auction'
   | 'thirty-one'
@@ -23,12 +30,33 @@ export type LogEntry = { turn: number; text: string }
 /** Ventana de una habilidad expresada en números de turno absolutos. */
 export type AbilityState = { from: number; until: number; readyAt: number }
 
+/**
+ * Variantes de subasta preparadas para una fase posterior:
+ * - `sealed`: Oferta Secreta; todos pujan a ciegas.
+ * - `open`: Puja Abierta; la mejor puja arranca un contador de 5 tics que se
+ *   reinicia cada vez que alguien mejora la oferta.
+ */
+export type AuctionMode = 'sealed' | 'open'
+
+export const AUCTION_NAMES: Record<AuctionMode, string> = {
+  sealed: 'Subasta a ciegas',
+  open: 'Subasta relámpago',
+}
+
 export type AuctionState = {
   tileId: number
   minBid: number
+  mode: AuctionMode
+  /** true si la subasta la lanzó un evento; false para una subasta normal. */
+  initial: boolean
   /** Pujas a sobre cerrado. 0 = pasar. */
   bids: Record<string, number>
   pending: string[]
+  /** Puja Abierta: mejor postor actual y su oferta. */
+  leader: string | null
+  leaderBid: number
+  /** Puja Abierta: tics que le quedan a la mejor puja (5..1). */
+  countdown: number
 }
 
 export type Table31State = {
@@ -61,6 +89,12 @@ export type CucupolyState = {
   order: string[]
   currentIndex: number
   turnNumber: number
+  /** Ronda actual (1-based). Sube cuando el turno vuelve a empezar. */
+  roundNumber: number
+  /** Evento inicial elegido por el anfitrión; null hasta que arranca. */
+  initialEvent: InitialEventId | null
+  /** Sube en 1 al anunciar un evento; los clientes lo usan para animar una vez. */
+  eventSeq: number
   phase: Phase
   owners: Record<number, string | null>
   positions: Record<string, number>
@@ -242,6 +276,7 @@ function endTurn(state: CucupolyState): void {
   state.auction = null
 
   const size = state.order.length
+  const previousIndex = state.currentIndex
   for (let step = 1; step <= size; step += 1) {
     const index = (state.currentIndex + step) % size
     if (!state.bankrupt.includes(state.order[index])) {
@@ -249,7 +284,15 @@ function endTurn(state: CucupolyState): void {
       break
     }
   }
-  state.phase = 'waiting-roll'
+  // La ronda cambia cuando el turno vuelve a empezar (o salta por encima del
+  // inicio porque los primeros asientos están eliminados).
+  if (state.currentIndex <= previousIndex) state.roundNumber += 1
+  // Al empezar la ronda 2 se abre la fase de evento. El anfitrión sortea el
+  // evento fuera del reducer y lo aplica con `start-initial-event`.
+  state.phase =
+    state.roundNumber === INITIAL_EVENT_ROUND && state.initialEvent === null
+      ? 'event'
+      : 'waiting-roll'
 }
 
 function eliminate(state: CucupolyState, playerId: string, creditor: string | null): void {
@@ -305,6 +348,12 @@ function readInt(payload: unknown, key: string): number | null {
   return typeof value === 'number' && Number.isInteger(value) ? value : null
 }
 
+function readEventId(payload: unknown): InitialEventId | null {
+  if (typeof payload !== 'object' || payload === null) return null
+  const value = (payload as Record<string, unknown>).eventId
+  return isInitialEventId(value) ? value : null
+}
+
 function readTiles(value: unknown): number[] | null {
   if (value === undefined || value === null) return []
   if (!Array.isArray(value)) return null
@@ -345,6 +394,9 @@ export function init(players: Player[], seed: number): CucupolyState {
     order,
     currentIndex: 0,
     turnNumber: 0,
+    roundNumber: 1,
+    initialEvent: null,
+    eventSeq: 0,
     phase: 'waiting-roll',
     owners: {},
     positions,
@@ -364,20 +416,6 @@ export function init(players: Player[], seed: number): CucupolyState {
     winner: null,
     rollSeq: 0,
   }
-
-  const properties = BOARD.filter((tile) => tile.type === 'property')
-  const picked = properties[randomInt(state, 0, properties.length - 1)]
-  state.auction = {
-    tileId: picked.index,
-    minBid: Math.round((picked.price ?? 0) * RULES.auctionStartRate),
-    bids: {},
-    pending: [...order],
-  }
-  state.phase = 'auction'
-  pushLog(
-    state,
-    `Subasta sorpresa inicial: ${picked.name} desde $${state.auction.minBid}.`,
-  )
 
   return state
 }
@@ -400,6 +438,10 @@ export function reduce(
       return handleDecline(state, playerId)
     case 'bid':
       return handleBid(state, playerId, action.payload)
+    case 'auction-tick':
+      return handleAuctionTick(state, playerId)
+    case 'start-initial-event':
+      return handleStartInitialEvent(state, playerId, action.payload)
     case 'pay-bail':
       return handlePayBail(state, playerId)
     case 'activate-ability':
@@ -596,7 +638,7 @@ function handleBuy(state: CucupolyState, playerId: string): CucupolyState | { er
   if (isBlackoutActive(state)) return { error: 'Apagón: nadie puede comprar propiedades.' }
 
   const tile = BOARD[state.pendingBuy]
-  const price = tile.price ?? 0
+  const price = purchasePriceFor(tile.price ?? 0, state.initialEvent, state.roundNumber)
   if ((state.money[playerId] ?? 0) < price) return { error: 'No tienes dinero suficiente.' }
 
   state.money[playerId] = (state.money[playerId] ?? 0) - price
@@ -619,12 +661,55 @@ function handleDecline(state: CucupolyState, playerId: string): CucupolyState | 
   return state
 }
 
+function handleStartInitialEvent(
+  state: CucupolyState,
+  playerId: string,
+  payload: unknown,
+): CucupolyState | { error: string } {
+  if (playerId !== state.order[0]) {
+    return { error: 'Solo el anfitrión puede sortear el evento inicial.' }
+  }
+  if (state.phase !== 'event') return { error: 'No es el momento del evento inicial.' }
+  if (state.roundNumber !== INITIAL_EVENT_ROUND) {
+    return { error: 'El evento inicial solo ocurre al empezar la ronda 2.' }
+  }
+  if (state.initialEvent !== null) return { error: 'El evento inicial ya ocurrió.' }
+
+  const eventId = readEventId(payload)
+  if (!eventId) return { error: 'Evento inicial no válido.' }
+
+  state.initialEvent = eventId
+  state.eventSeq += 1
+
+  if (eventId === 'impulso_economico') {
+    for (const id of activeIds(state)) {
+      state.money[id] = (state.money[id] ?? 0) + RULES.initialEventBoost
+    }
+    pushLog(
+      state,
+      `Evento inicial: Impulso Económico. Todos los jugadores activos reciben $${RULES.initialEventBoost}.`,
+    )
+  } else {
+    pushLog(
+      state,
+      'Evento inicial: Semana de descuentos. Las propiedades estarán a mitad de precio en las rondas 3, 4 y 5.',
+    )
+  }
+
+  state.phase = 'waiting-roll'
+  return state
+}
+
 function handleBid(
   state: CucupolyState,
   playerId: string,
   payload: unknown,
 ): CucupolyState | { error: string } {
   if (state.phase !== 'auction' || !state.auction) return { error: 'No hay subasta activa.' }
+  if (state.bankrupt.includes(playerId)) return { error: 'Estás eliminado.' }
+
+  if (state.auction.mode === 'open') return handleOpenBid(state, playerId, payload)
+
   if (!state.auction.pending.includes(playerId)) return { error: 'Ya pujaste.' }
 
   const amount = readInt(payload, 'amount')
@@ -640,9 +725,76 @@ function handleBid(
   return state
 }
 
+/** Puja de la subasta relámpago: cada mejora reinicia el contador a 5. */
+function handleOpenBid(
+  state: CucupolyState,
+  playerId: string,
+  payload: unknown,
+): CucupolyState | { error: string } {
+  const auction = state.auction
+  if (!auction) return { error: 'No hay subasta activa.' }
+  if (auction.leader === playerId) return { error: 'Ya vas ganando la subasta.' }
+
+  const amount = readInt(payload, 'amount')
+  if (amount === null || amount < 0) return { error: 'Puja no válida.' }
+  const floor = auction.leader ? auction.leaderBid + 1 : auction.minBid
+  if (amount < floor) return { error: `La puja mínima es $${floor}.` }
+  if (amount > (state.money[playerId] ?? 0)) return { error: 'No tienes tanto dinero.' }
+
+  auction.leader = playerId
+  auction.leaderBid = amount
+  auction.countdown = RULES.openAuctionCountdown
+  pushLog(
+    state,
+    `${state.names[playerId]} puja $${amount} por ${BOARD[auction.tileId].name}.`,
+  )
+  return state
+}
+
+/**
+ * Reloj de la subasta relámpago. Solo el anfitrión (primer asiento) lo mueve;
+ * los clientes no usan `Date.now`, así que el cierre es determinista.
+ */
+function handleAuctionTick(
+  state: CucupolyState,
+  playerId: string,
+): CucupolyState | { error: string } {
+  if (playerId !== state.order[0]) {
+    return { error: 'Solo el anfitrión controla el reloj de la subasta.' }
+  }
+  // Un tic tardío después de cerrar no es un error: el temporizador del
+  // anfitrión puede dispararse una vez más antes de desmontarse.
+  if (state.phase !== 'auction' || !state.auction || state.auction.mode !== 'open') {
+    return state
+  }
+  if (state.auction.countdown <= 0) return state
+
+  state.auction.countdown -= 1
+  if (state.auction.countdown === 0) resolveAuction(state)
+  return state
+}
+
 function resolveAuction(state: CucupolyState): void {
   const auction = state.auction
   if (!auction) return
+
+  if (auction.mode === 'open') {
+    if (auction.leader) {
+      const bid = auction.leaderBid
+      state.money[auction.leader] = (state.money[auction.leader] ?? 0) - bid
+      state.owners[auction.tileId] = auction.leader
+      pushLog(
+        state,
+        `${state.names[auction.leader]} gana ${BOARD[auction.tileId].name} en ${AUCTION_NAMES.open} por $${bid}.`,
+      )
+    } else {
+      pushLog(state, `Nadie puja por ${BOARD[auction.tileId].name}; queda sin dueño.`)
+    }
+
+    state.auction = null
+    state.phase = 'waiting-roll'
+    return
+  }
 
   const bidders = Object.keys(auction.bids).filter(
     (id) => (auction.bids[id] ?? 0) >= auction.minBid,
@@ -662,7 +814,7 @@ function resolveAuction(state: CucupolyState): void {
     state.owners[auction.tileId] = winner
     pushLog(
       state,
-      `${state.names[winner]} gana ${BOARD[auction.tileId].name} en subasta por $${bid}.`,
+      `${state.names[winner]} gana ${BOARD[auction.tileId].name} en ${AUCTION_NAMES.sealed} por $${bid}.`,
     )
   }
 
