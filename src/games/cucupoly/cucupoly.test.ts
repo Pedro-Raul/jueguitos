@@ -9,7 +9,16 @@ import {
   rentFor,
   type CucupolyState,
 } from './engine'
-import { EVENTS, EVENT_BANNER_MS, INITIAL_EVENT_POOL, purchasePriceFor } from './events'
+import {
+  AUCTION_OPEN_IDLE_TICKS,
+  EVENTS,
+  EVENT_BANNER_MS,
+  INITIAL_EVENT_POOL,
+  MIN_RAISE,
+  drawableEvents,
+  freeAuctionTiles,
+  purchasePriceFor,
+} from './events'
 import { RULES } from './rules.config'
 
 const ANA: Player = { id: 'p1', name: 'Ana', emoji: '🐙', color: '#e11d48', connected: true }
@@ -121,7 +130,7 @@ describe('evento inicial: ronda 2', () => {
     // Un id fuera del catálogo se rechaza.
     expect(
       isGameError(
-        reduce(state, { type: 'start-initial-event', payload: { eventId: 'oferta_secreta' } }, 'p1'),
+        reduce(state, { type: 'start-initial-event', payload: { eventId: 'evento_inventado' } }, 'p1'),
       ),
     ).toBe(true)
 
@@ -231,14 +240,289 @@ describe('evento inicial: ronda 2', () => {
 })
 
 describe('catálogo de eventos', () => {
-  it('solo incluye los dos eventos de esta fase', () => {
-    expect(INITIAL_EVENT_POOL).toEqual(['impulso_economico', 'semana_descuentos'])
+  it('incluye los cuatro eventos de la fase', () => {
+    expect(INITIAL_EVENT_POOL).toEqual([
+      'impulso_economico',
+      'semana_descuentos',
+      'oferta_secreta',
+      'puja_abierta',
+    ])
     expect(Object.keys(EVENTS).sort()).toEqual([...INITIAL_EVENT_POOL].sort())
     for (const id of INITIAL_EVENT_POOL) {
       expect(EVENTS[id].name.length).toBeGreaterThan(0)
       expect(EVENTS[id].description.length).toBeGreaterThan(0)
     }
     expect(EVENT_BANNER_MS).toBeGreaterThanOrEqual(5000)
+  })
+})
+
+describe('subastas de evento', () => {
+  function reachRoundTwo(players: Player[] = TWO): CucupolyState {
+    let state = fresh(players, 99)
+    for (const player of players) state = passTurn(state, player.id)
+    expect(state.phase).toBe('event')
+    return state
+  }
+
+  function startAuction(
+    state: CucupolyState,
+    eventId: 'oferta_secreta' | 'puja_abierta',
+    tileId = 1,
+    host = 'p1',
+  ): CucupolyState | { error: string } {
+    return reduce(
+      state,
+      { type: 'start-initial-event', payload: { eventId, tileId } },
+      host,
+    )
+  }
+
+  function openAuction(state: CucupolyState, host = 'p1'): CucupolyState {
+    return reduce(state, { type: 'open-initial-auction' }, host) as CucupolyState
+  }
+
+  it('elige una propiedad sin dueño y no subasta casillas ocupadas', () => {
+    const free = freeAuctionTiles({})
+    expect(free.length).toBeGreaterThan(1)
+    expect(drawableEvents({})).toEqual([...INITIAL_EVENT_POOL])
+
+    const allOwned: Record<number, string> = {}
+    for (const tile of BOARD) {
+      if (tile.price !== undefined) allOwned[tile.index] = 'p1'
+    }
+    expect(freeAuctionTiles(allOwned)).toEqual([])
+    // Sin propiedades libres, las subastas salen del sorteo.
+    expect(drawableEvents(allOwned)).toEqual(['impulso_economico', 'semana_descuentos'])
+
+    const state = reachRoundTwo()
+    state.owners[free[0]] = 'p2'
+    expect(isGameError(startAuction(state, 'oferta_secreta', free[0]))).toBe(true)
+
+    const started = startAuction(state, 'oferta_secreta', free[1]) as CucupolyState
+    expect(started.initialEvent).toBe('oferta_secreta')
+    // El anuncio sigue en pantalla: la subasta aún no está abierta.
+    expect(started.phase).toBe('event')
+    expect(started.auction).toMatchObject({ tileId: free[1], mode: 'sealed' })
+    expect(started.auction?.pending).toEqual(['p1', 'p2'])
+
+    // Solo el anfitrión abre la subasta, y solo después del anuncio.
+    expect(isGameError(reduce(started, { type: 'open-initial-auction' }, 'p2'))).toBe(true)
+    expect(isGameError(reduce(started, { type: 'roll' }, 'p1'))).toBe(true)
+
+    const opened = openAuction(started)
+    expect(opened.phase).toBe('auction')
+    expect(opened.auction?.mode).toBe('sealed')
+  })
+
+  it('Oferta Secreta: no difunde importes y el empate lo gana quien llegó primero', () => {
+    let state = openAuction(
+      startAuction(reachRoundTwo(), 'oferta_secreta', 1) as CucupolyState,
+    )
+    const before = { ...state.money }
+
+    state = reduce(
+      state,
+      { type: 'secret-bid', payload: { amount: 100 } },
+      'p1',
+    ) as CucupolyState
+    state = reduce(
+      state,
+      { type: 'secret-bid', payload: { amount: 100 } },
+      'p2',
+    ) as CucupolyState
+
+    expect(state.auction?.pending).toEqual([])
+    expect(state.auction?.registered).toEqual(['p1', 'p2'])
+    // El estado público solo dice quién respondió, nunca cuánto.
+    expect(state.auction).not.toHaveProperty('bids')
+    expect(Object.keys(state.auction ?? {}).sort()).toEqual([
+      'countdown',
+      'leader',
+      'leaderBid',
+      'mode',
+      'pending',
+      'registered',
+      'tileId',
+    ])
+    expect(JSON.stringify(state.auction)).not.toContain('amount')
+
+    // Solo el anfitrión cierra con las ofertas.
+    expect(
+      isGameError(
+        reduce(
+          state,
+          { type: 'resolve-secret-auction', payload: { bids: [] } },
+          'p2',
+        ),
+      ),
+    ).toBe(true)
+
+    // Orden de llegada: p1 primero, así que gana el empate.
+    const resolved = reduce(
+      state,
+      {
+        type: 'resolve-secret-auction',
+        payload: {
+          bids: [
+            { playerId: 'p1', amount: 100 },
+            { playerId: 'p2', amount: 100 },
+          ],
+        },
+      },
+      'p1',
+    ) as CucupolyState
+
+    expect(resolved.owners[1]).toBe('p1')
+    expect(resolved.money.p1).toBe(before.p1 - 100)
+    expect(resolved.money.p2).toBe(before.p2)
+    expect(resolved.phase).toBe('waiting-roll')
+    expect(resolved.auction).toBeNull()
+  })
+
+  it('Oferta Secreta: si el orden se invierte, gana el otro empatado', () => {
+    let state = openAuction(
+      startAuction(reachRoundTwo(), 'oferta_secreta', 1) as CucupolyState,
+    )
+    state = reduce(
+      state,
+      { type: 'secret-bid', payload: { amount: 80 } },
+      'p2',
+    ) as CucupolyState
+    state = reduce(
+      state,
+      { type: 'secret-bid', payload: { amount: 80 } },
+      'p1',
+    ) as CucupolyState
+
+    const resolved = reduce(
+      state,
+      {
+        type: 'resolve-secret-auction',
+        payload: {
+          bids: [
+            { playerId: 'p2', amount: 80 },
+            { playerId: 'p1', amount: 80 },
+          ],
+        },
+      },
+      'p1',
+    ) as CucupolyState
+
+    expect(resolved.owners[1]).toBe('p2')
+    expect(resolved.money.p2).toBe(RULES.startingMoney - 80)
+  })
+
+  it('Oferta Secreta: sin ofertas no cambia el dinero ni el dueño', () => {
+    const state = openAuction(
+      startAuction(reachRoundTwo(), 'oferta_secreta', 1) as CucupolyState,
+    )
+    const before = { ...state.money }
+    const resolved = reduce(
+      state,
+      { type: 'resolve-secret-auction', payload: { bids: [] } },
+      'p1',
+    ) as CucupolyState
+
+    expect(resolved.owners[1]).toBeUndefined()
+    expect(resolved.money).toEqual(before)
+    expect(resolved.phase).toBe('waiting-roll')
+  })
+
+  it('Oferta Secreta: rechaza ofertas por encima del efectivo o bajo el mínimo', () => {
+    const state = openAuction(
+      startAuction(reachRoundTwo(), 'oferta_secreta', 1) as CucupolyState,
+    )
+    expect(
+      isGameError(
+        reduce(
+          state,
+          { type: 'secret-bid', payload: { amount: (state.money.p1 ?? 0) + 1 } },
+          'p1',
+        ),
+      ),
+    ).toBe(true)
+    expect(
+      isGameError(
+        reduce(state, { type: 'secret-bid', payload: { amount: MIN_RAISE - 1 } }, 'p1'),
+      ),
+    ).toBe(true)
+    expect(
+      isGameError(
+        reduce(state, { type: 'secret-bid', payload: { amount: MIN_RAISE } }, 'p1'),
+      ),
+    ).toBe(false)
+  })
+
+  it('Puja Abierta: mínimo, mejora, líder único y reinicio del contador', () => {
+    let state = openAuction(
+      startAuction(reachRoundTwo(), 'puja_abierta', 1) as CucupolyState,
+    )
+    expect(state.auction?.countdown).toBe(AUCTION_OPEN_IDLE_TICKS)
+    const before = { ...state.money }
+
+    expect(
+      isGameError(
+        reduce(state, { type: 'open-bid', payload: { amount: MIN_RAISE - 1 } }, 'p1'),
+      ),
+    ).toBe(true)
+    expect(
+      isGameError(
+        reduce(
+          state,
+          { type: 'open-bid', payload: { amount: (state.money.p1 ?? 0) + 1 } },
+          'p1',
+        ),
+      ),
+    ).toBe(true)
+
+    state = reduce(
+      state,
+      { type: 'open-bid', payload: { amount: MIN_RAISE } },
+      'p1',
+    ) as CucupolyState
+    expect(state.auction?.leader).toBe('p1')
+    expect(state.auction?.leaderBid).toBe(MIN_RAISE)
+    expect(state.auction?.countdown).toBe(AUCTION_OPEN_IDLE_TICKS)
+
+    // El líder no puede pujar contra sí mismo.
+    expect(
+      isGameError(
+        reduce(state, { type: 'open-bid', payload: { amount: MIN_RAISE + 5 } }, 'p1'),
+      ),
+    ).toBe(true)
+    // Hay que superar al líder por al menos MIN_RAISE.
+    expect(
+      isGameError(
+        reduce(
+          state,
+          { type: 'open-bid', payload: { amount: MIN_RAISE + MIN_RAISE - 1 } },
+          'p2',
+        ),
+      ),
+    ).toBe(true)
+
+    // Un tic baja el contador y una puja válida lo reinicia.
+    state = reduce(state, { type: 'auction-tick' }, 'p1') as CucupolyState
+    expect(state.auction?.countdown).toBe(AUCTION_OPEN_IDLE_TICKS - 1)
+    state = reduce(
+      state,
+      { type: 'open-bid', payload: { amount: MIN_RAISE + MIN_RAISE } },
+      'p2',
+    ) as CucupolyState
+    expect(state.auction?.leader).toBe('p2')
+    expect(state.auction?.countdown).toBe(AUCTION_OPEN_IDLE_TICKS)
+
+    // Solo el anfitrión mueve el reloj.
+    expect(isGameError(reduce(state, { type: 'auction-tick' }, 'p2'))).toBe(true)
+
+    for (let i = 0; i < AUCTION_OPEN_IDLE_TICKS; i += 1) {
+      state = reduce(state, { type: 'auction-tick' }, 'p1') as CucupolyState
+    }
+
+    expect(state.phase).toBe('waiting-roll')
+    expect(state.owners[1]).toBe('p2')
+    expect(state.money.p2).toBe(before.p2 - (MIN_RAISE + MIN_RAISE))
+    expect(state.auction).toBeNull()
   })
 })
 

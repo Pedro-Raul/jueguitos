@@ -17,14 +17,8 @@ export const RULES = {
   busRents: [25, 50, 100, 200],
   /** SUPUESTO: multiplicador de renta de servicios según cuántos tenga el dueño (1..3). */
   serviceMultipliers: [4, 10, 15],
-  /** SUPUESTO: la subasta arranca en el 75% del precio. */
-  auctionStartRate: 0.75,
   /** SUPUESTO: dinero que reparte Impulso Económico a cada jugador activo. */
   initialEventBoost: 250,
-  /** SUPUESTO: tics del contador de la subasta relámpago. */
-  openAuctionCountdown: 5,
-  /** SUPUESTO: milisegundos entre tics del contador. */
-  openAuctionTickMs: 1000,
   /** SUPUESTO: apuesta máxima por jugador en la mesa de 31. */
   table31BetLimit: 100,
   /** SUPUESTO: objetivo de la mesa de 31. */

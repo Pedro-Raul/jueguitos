@@ -9,9 +9,14 @@ import {
 } from './board'
 import { RULES } from './rules.config'
 import {
+  AUCTION_OPEN_IDLE_TICKS,
   INITIAL_EVENT_ROUND,
+  MIN_RAISE,
+  auctionModeFor,
+  freeAuctionTiles,
   isInitialEventId,
   purchasePriceFor,
+  type AuctionMode,
   type InitialEventId,
 } from './events'
 
@@ -31,31 +36,30 @@ export type LogEntry = { turn: number; text: string }
 export type AbilityState = { from: number; until: number; readyAt: number }
 
 /**
- * Variantes de subasta preparadas para una fase posterior:
- * - `sealed`: Oferta Secreta; todos pujan a ciegas.
- * - `open`: Puja Abierta; la mejor puja arranca un contador de 5 tics que se
- *   reinicia cada vez que alguien mejora la oferta.
+ * Variantes de subasta de evento:
+ * - `sealed`: Oferta Secreta; todos ofertan a ciegas.
+ * - `open`: Puja Abierta; cada puja reinicia una cuenta regresiva.
  */
-export type AuctionMode = 'sealed' | 'open'
-
 export const AUCTION_NAMES: Record<AuctionMode, string> = {
-  sealed: 'Subasta a ciegas',
-  open: 'Subasta relámpago',
+  sealed: 'Oferta Secreta',
+  open: 'Puja Abierta',
 }
 
+/**
+ * Subasta de un evento inicial. En la Oferta Secreta el estado solo guarda
+ * quién ya respondió; los importes viven en el anfitrión y no se difunden.
+ */
 export type AuctionState = {
   tileId: number
-  minBid: number
   mode: AuctionMode
-  /** true si la subasta la lanzó un evento; false para una subasta normal. */
-  initial: boolean
-  /** Pujas a sobre cerrado. 0 = pasar. */
-  bids: Record<string, number>
+  /** Oferta Secreta: jugadores que aún no han ofertado ni pasado. */
   pending: string[]
-  /** Puja Abierta: mejor postor actual y su oferta. */
+  /** Oferta Secreta: jugadores que ya respondieron, en orden de llegada. */
+  registered: string[]
+  /** Puja Abierta: líder actual y su oferta. */
   leader: string | null
   leaderBid: number
-  /** Puja Abierta: tics que le quedan a la mejor puja (5..1). */
+  /** Puja Abierta: tics restantes antes de cerrar. */
   countdown: number
 }
 
@@ -224,7 +228,11 @@ function cloneState(source: CucupolyState): CucupolyState {
     dice: source.dice ? { ...source.dice, values: [...source.dice.values] } : null,
     diceModifier: source.diceModifier ? { ...source.diceModifier } : null,
     auction: source.auction
-      ? { ...source.auction, bids: { ...source.auction.bids }, pending: [...source.auction.pending] }
+      ? {
+          ...source.auction,
+          pending: [...source.auction.pending],
+          registered: [...source.auction.registered],
+        }
       : null,
     table31: source.table31
       ? {
@@ -436,10 +444,16 @@ export function reduce(
       return handleBuy(state, playerId)
     case 'decline':
       return handleDecline(state, playerId)
-    case 'bid':
-      return handleBid(state, playerId, action.payload)
+    case 'secret-bid':
+      return handleSecretBid(state, playerId, action.payload)
+    case 'open-bid':
+      return handleOpenBid(state, playerId, action.payload)
     case 'auction-tick':
       return handleAuctionTick(state, playerId)
+    case 'resolve-secret-auction':
+      return handleResolveSecretAuction(state, playerId, action.payload)
+    case 'open-initial-auction':
+      return handleOpenInitialAuction(state, playerId)
     case 'start-initial-event':
       return handleStartInitialEvent(state, playerId, action.payload)
     case 'pay-bail':
@@ -678,6 +692,34 @@ function handleStartInitialEvent(
   const eventId = readEventId(payload)
   if (!eventId) return { error: 'Evento inicial no válido.' }
 
+  const mode = auctionModeFor(eventId)
+  if (mode) {
+    const tileId = readInt(payload, 'tileId')
+    if (tileId === null) return { error: 'Falta la propiedad de la subasta.' }
+    if (!freeAuctionTiles(state.owners).includes(tileId)) {
+      return { error: 'Esa propiedad ya tiene dueño.' }
+    }
+
+    state.initialEvent = eventId
+    state.eventSeq += 1
+    state.auction = {
+      tileId,
+      mode,
+      pending: activeIds(state),
+      registered: [],
+      leader: null,
+      leaderBid: 0,
+      countdown: 0,
+    }
+    pushLog(
+      state,
+      `Evento inicial: ${AUCTION_NAMES[mode]} por ${BOARD[tileId].name}.`,
+    )
+    // La fase sigue en 'event': el anfitrión abre la subasta cuando el anuncio
+    // termina, con `open-initial-auction`.
+    return state
+  }
+
   state.initialEvent = eventId
   state.eventSeq += 1
 
@@ -700,50 +742,74 @@ function handleStartInitialEvent(
   return state
 }
 
-function handleBid(
+type SecretBid = { playerId: string; amount: number }
+
+function readSecretBids(payload: unknown): SecretBid[] | null {
+  if (typeof payload !== 'object' || payload === null) return null
+  const raw = (payload as Record<string, unknown>).bids
+  if (!Array.isArray(raw)) return null
+
+  const bids: SecretBid[] = []
+  for (const item of raw) {
+    if (typeof item !== 'object' || item === null) return null
+    const entry = item as Record<string, unknown>
+    if (typeof entry.playerId !== 'string') return null
+    if (typeof entry.amount !== 'number' || !Number.isInteger(entry.amount)) return null
+    if (entry.amount < 0) return null
+    if (bids.some((bid) => bid.playerId === entry.playerId)) return null
+    bids.push({ playerId: entry.playerId, amount: entry.amount })
+  }
+  return bids
+}
+
+/**
+ * Oferta Secreta: registra que el jugador respondió. El importe NO entra en el
+ * estado (se difunde a todos los clientes); el anfitrión lo guarda aparte y lo
+ * envía al cerrar con `resolve-secret-auction`.
+ */
+function handleSecretBid(
   state: CucupolyState,
   playerId: string,
   payload: unknown,
 ): CucupolyState | { error: string } {
   if (state.phase !== 'auction' || !state.auction) return { error: 'No hay subasta activa.' }
+  if (state.auction.mode !== 'sealed') return { error: 'La subasta no es a ciegas.' }
   if (state.bankrupt.includes(playerId)) return { error: 'Estás eliminado.' }
-
-  if (state.auction.mode === 'open') return handleOpenBid(state, playerId, payload)
-
-  if (!state.auction.pending.includes(playerId)) return { error: 'Ya pujaste.' }
+  if (!state.auction.pending.includes(playerId)) return { error: 'Ya ofertaste.' }
 
   const amount = readInt(payload, 'amount')
-  if (amount === null || amount < 0) return { error: 'Puja no válida.' }
-  if (amount > 0 && amount < state.auction.minBid) {
-    return { error: `La puja mínima es $${state.auction.minBid}.` }
+  if (amount === null || amount < 0) return { error: 'Oferta no válida.' }
+  if (amount > 0 && amount < MIN_RAISE) {
+    return { error: `La oferta mínima es $${MIN_RAISE}.` }
   }
   if (amount > (state.money[playerId] ?? 0)) return { error: 'No tienes tanto dinero.' }
 
-  state.auction.bids[playerId] = amount
   state.auction.pending = state.auction.pending.filter((id) => id !== playerId)
-  if (state.auction.pending.length === 0) resolveAuction(state)
+  state.auction.registered.push(playerId)
   return state
 }
 
-/** Puja de la subasta relámpago: cada mejora reinicia el contador a 5. */
+/** Puja Abierta: cada puja válida reinicia la cuenta regresiva visible. */
 function handleOpenBid(
   state: CucupolyState,
   playerId: string,
   payload: unknown,
 ): CucupolyState | { error: string } {
+  if (state.phase !== 'auction' || !state.auction) return { error: 'No hay subasta activa.' }
   const auction = state.auction
-  if (!auction) return { error: 'No hay subasta activa.' }
+  if (auction.mode !== 'open') return { error: 'La subasta no es abierta.' }
+  if (state.bankrupt.includes(playerId)) return { error: 'Estás eliminado.' }
   if (auction.leader === playerId) return { error: 'Ya vas ganando la subasta.' }
 
   const amount = readInt(payload, 'amount')
   if (amount === null || amount < 0) return { error: 'Puja no válida.' }
-  const floor = auction.leader ? auction.leaderBid + 1 : auction.minBid
+  const floor = auction.leader ? auction.leaderBid + MIN_RAISE : MIN_RAISE
   if (amount < floor) return { error: `La puja mínima es $${floor}.` }
   if (amount > (state.money[playerId] ?? 0)) return { error: 'No tienes tanto dinero.' }
 
   auction.leader = playerId
   auction.leaderBid = amount
-  auction.countdown = RULES.openAuctionCountdown
+  auction.countdown = AUCTION_OPEN_IDLE_TICKS
   pushLog(
     state,
     `${state.names[playerId]} puja $${amount} por ${BOARD[auction.tileId].name}.`,
@@ -752,8 +818,8 @@ function handleOpenBid(
 }
 
 /**
- * Reloj de la subasta relámpago. Solo el anfitrión (primer asiento) lo mueve;
- * los clientes no usan `Date.now`, así que el cierre es determinista.
+ * Reloj de la Puja Abierta. Solo el anfitrión (primer asiento) lo mueve; los
+ * clientes no usan `Date.now`, así que el cierre es determinista.
  */
 function handleAuctionTick(
   state: CucupolyState,
@@ -770,52 +836,103 @@ function handleAuctionTick(
   if (state.auction.countdown <= 0) return state
 
   state.auction.countdown -= 1
-  if (state.auction.countdown === 0) resolveAuction(state)
+  if (state.auction.countdown === 0) resolveOpenAuction(state)
   return state
 }
 
-function resolveAuction(state: CucupolyState): void {
+/**
+ * Cierre de la Oferta Secreta. Solo el anfitrión lo dispara, con las ofertas en
+ * orden de llegada; en empate gana la primera registrada.
+ */
+function handleResolveSecretAuction(
+  state: CucupolyState,
+  playerId: string,
+  payload: unknown,
+): CucupolyState | { error: string } {
+  if (playerId !== state.order[0]) {
+    return { error: 'Solo el anfitrión puede cerrar la subasta.' }
+  }
+  // Un cierre tardío (el temporizador y "todos respondieron" pueden coincidir)
+  // no es un error: la subasta ya terminó.
+  if (state.phase !== 'auction' || !state.auction) return state
+  if (state.auction.mode !== 'sealed') return state
+
+  const bids = readSecretBids(payload)
+  if (!bids) return { error: 'Ofertas no válidas.' }
+
+  const registered = new Set(state.auction.registered)
+  for (const bid of bids) {
+    if (!registered.has(bid.playerId)) {
+      return { error: 'Oferta de un jugador que no participó.' }
+    }
+    if (bid.amount > (state.money[bid.playerId] ?? 0)) {
+      return { error: 'Oferta superior al efectivo del jugador.' }
+    }
+  }
+
+  resolveSealedAuction(state, bids)
+  return state
+}
+
+/** El anuncio terminó: la subasta pasa a estar activa. */
+function handleOpenInitialAuction(
+  state: CucupolyState,
+  playerId: string,
+): CucupolyState | { error: string } {
+  if (playerId !== state.order[0]) {
+    return { error: 'Solo el anfitrión puede abrir la subasta.' }
+  }
+  // Si el anuncio ya terminó, el temporizador tardío no debe romper nada.
+  if (state.phase !== 'event') return state
+  if (!state.auction) return state
+
+  state.phase = 'auction'
+  if (state.auction.mode === 'open') {
+    state.auction.countdown = AUCTION_OPEN_IDLE_TICKS
+  }
+  return state
+}
+
+function resolveSealedAuction(state: CucupolyState, bids: SecretBid[]): void {
   const auction = state.auction
   if (!auction) return
 
-  if (auction.mode === 'open') {
-    if (auction.leader) {
-      const bid = auction.leaderBid
-      state.money[auction.leader] = (state.money[auction.leader] ?? 0) - bid
-      state.owners[auction.tileId] = auction.leader
-      pushLog(
-        state,
-        `${state.names[auction.leader]} gana ${BOARD[auction.tileId].name} en ${AUCTION_NAMES.open} por $${bid}.`,
-      )
-    } else {
-      pushLog(state, `Nadie puja por ${BOARD[auction.tileId].name}; queda sin dueño.`)
-    }
-
-    state.auction = null
-    state.phase = 'waiting-roll'
-    return
+  let winner: SecretBid | null = null
+  for (const bid of bids) {
+    if (bid.amount <= 0) continue
+    // Estrictamente mayor: en empate gana quien llegó primero.
+    if (!winner || bid.amount > winner.amount) winner = bid
   }
 
-  const bidders = Object.keys(auction.bids).filter(
-    (id) => (auction.bids[id] ?? 0) >= auction.minBid,
-  )
-
-  if (bidders.length === 0) {
-    pushLog(state, `Nadie puja por ${BOARD[auction.tileId].name}; queda sin dueño.`)
+  if (!winner) {
+    pushLog(state, `Nadie oferta por ${BOARD[auction.tileId].name}; queda sin dueño.`)
   } else {
-    bidders.sort((a, b) => {
-      const diff = (auction.bids[b] ?? 0) - (auction.bids[a] ?? 0)
-      if (diff !== 0) return diff
-      return state.order.indexOf(a) - state.order.indexOf(b)
-    })
-    const winner = bidders[0]
-    const bid = auction.bids[winner] ?? 0
-    state.money[winner] = (state.money[winner] ?? 0) - bid
-    state.owners[auction.tileId] = winner
+    state.money[winner.playerId] = (state.money[winner.playerId] ?? 0) - winner.amount
+    state.owners[auction.tileId] = winner.playerId
     pushLog(
       state,
-      `${state.names[winner]} gana ${BOARD[auction.tileId].name} en ${AUCTION_NAMES.sealed} por $${bid}.`,
+      `${state.names[winner.playerId]} gana ${BOARD[auction.tileId].name} en ${AUCTION_NAMES.sealed} por $${winner.amount}.`,
     )
+  }
+
+  state.auction = null
+  state.phase = 'waiting-roll'
+}
+
+function resolveOpenAuction(state: CucupolyState): void {
+  const auction = state.auction
+  if (!auction) return
+
+  if (auction.leader) {
+    const bid = auction.leaderBid
+    state.money[auction.leader] = (state.money[auction.leader] ?? 0) - bid
+    state.owners[auction.tileId] = auction.leader
+    pushLog(
+      state,
+      `${state.names[auction.leader]} gana ${BOARD[auction.tileId].name} en ${AUCTION_NAMES.open} por $${bid}.`,
+    )
+  } else {
+    pushLog(state, `Nadie puja por ${BOARD[auction.tileId].name}; queda sin dueño.`)
   }
 
   state.auction = null

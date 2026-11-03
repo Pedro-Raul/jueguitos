@@ -6,9 +6,15 @@ import {
   EVENTS,
   EVENT_BANNER_EXIT_MS,
   EVENT_BANNER_MS,
-  INITIAL_EVENT_POOL,
+  AUCTION_OPEN_IDLE_TICKS,
+  AUCTION_SECRET_MS,
+  AUCTION_TICK_MS,
+  MIN_RAISE,
   discountRoundsLeft,
+  drawableEvents,
+  freeAuctionTiles,
   hasSeenEvent,
+  isAuctionEvent,
   isDiscountActive,
   markEventSeen,
   purchasePriceFor,
@@ -17,6 +23,7 @@ import {
 import { planAnimations, snapshotSeen, type RollPlan, type SeenRoll } from './planAnimations'
 import { DICE_SECONDS } from './three/layout'
 import { RULES } from './rules.config'
+import { subscribeHostActions } from '../../net/hostActions'
 import {
   groupNameFor,
   isPurchasable,
@@ -52,7 +59,8 @@ function phaseHint(state: CucupolyState): string {
       if (auction.mode === 'open') {
         return `${name}: ${BOARD[auction.tileId].name} · cierra en ${auction.countdown}.`
       }
-      return `${name} de ${BOARD[auction.tileId].name}.`
+      const total = auction.registered.length + auction.pending.length
+      return `${name} de ${BOARD[auction.tileId].name} · ${auction.registered.length}/${total} ofertas.`
     }
     case 'thirty-one':
       return 'Mesa de 31 en curso.'
@@ -182,11 +190,11 @@ function ActionPanel({ state, me, dispatch }: PanelProps) {
   if (state.phase === 'auction' && state.auction) {
     const auction = state.auction
     const tileName = BOARD[auction.tileId].name
-    const eventLabel = auction.initial ? '¡Evento sorpresa!' : 'Subasta'
+    const eventLabel = 'Evento inicial'
 
     if (auction.mode === 'open') {
       const leading = auction.leader === me.id
-      const floor = auction.leader ? auction.leaderBid + 1 : auction.minBid
+      const floor = auction.leader ? auction.leaderBid + MIN_RAISE : MIN_RAISE
       const amount = bid === '' ? floor : Number(bid)
       const valid =
         Number.isInteger(amount) && amount >= floor && amount <= myMoney
@@ -199,13 +207,13 @@ function ActionPanel({ state, me, dispatch }: PanelProps) {
           <p>
             {auction.leader
               ? `Mejor puja: ${money(auction.leaderBid)} de ${nameOf(state, auction.leader)}.`
-              : `Puja mínima: ${money(auction.minBid)}.`}
+              : `Puja mínima: ${money(MIN_RAISE)}.`}
           </p>
           <div className="cp-countdown" role="timer" aria-live="polite">
             <span>{leading ? 'Vas ganando' : 'Cierra en'}</span>
             <strong>{auction.countdown}</strong>
             <span className="cp-countdown-dots" aria-hidden="true">
-              {Array.from({ length: RULES.openAuctionCountdown }, (_, index) => (
+              {Array.from({ length: AUCTION_OPEN_IDLE_TICKS }, (_, index) => (
                 <i key={index} className={index < auction.countdown ? 'is-on' : ''} />
               ))}
             </span>
@@ -230,13 +238,14 @@ function ActionPanel({ state, me, dispatch }: PanelProps) {
                   type="button"
                   disabled={!valid}
                   onClick={() => {
-                    dispatch({ type: 'bid', payload: { amount } })
+                    dispatch({ type: 'open-bid', payload: { amount } })
                     setBid('')
                   }}
                 >
                   Pujar {money(amount)}
                 </button>
               </div>
+              <p className="muted small">Cada puja reinicia la cuenta regresiva.</p>
             </>
           )}
         </div>
@@ -244,12 +253,19 @@ function ActionPanel({ state, me, dispatch }: PanelProps) {
     }
 
     const waiting = auction.pending.includes(me.id)
+    const sealedAmount = bid === '' ? null : Number(bid)
+    const sealedValid =
+      sealedAmount !== null &&
+      Number.isInteger(sealedAmount) &&
+      sealedAmount >= 0 &&
+      sealedAmount <= myMoney &&
+      (sealedAmount === 0 || sealedAmount >= MIN_RAISE)
     return (
       <div className="cp-action">
         <p className="cp-auction-event">
           <span className="cp-eyebrow">{eventLabel}</span>{' '}
           <strong>{AUCTION_NAMES.sealed}</strong> por <strong>{tileName}</strong>{' '}
-          desde {money(auction.minBid)}.
+          desde {money(MIN_RAISE)}.
         </p>
         {waiting ? (
           <>
@@ -258,36 +274,43 @@ function ActionPanel({ state, me, dispatch }: PanelProps) {
               min={0}
               max={myMoney}
               value={bid}
-              placeholder={String(auction.minBid)}
+              placeholder={String(MIN_RAISE)}
               onChange={(event) => setBid(event.target.value)}
             />
             <div className="actions">
               <button
                 className="primary"
                 type="button"
-                disabled={bid === ''}
+                disabled={!sealedValid}
                 onClick={() => {
-                  dispatch({ type: 'bid', payload: { amount: Number(bid) } })
+                  dispatch({ type: 'secret-bid', payload: { amount: sealedAmount ?? 0 } })
                   setBid('')
                 }}
               >
-                Pujar
+                Ofertar
               </button>
               <button
                 className="ghost"
                 type="button"
                 onClick={() => {
-                  dispatch({ type: 'bid', payload: { amount: 0 } })
+                  dispatch({ type: 'secret-bid', payload: { amount: 0 } })
                   setBid('')
                 }}
               >
                 Pasar
               </button>
             </div>
+            <p className="muted small">
+              Tu oferta es secreta. 0 = pasar; mínimo {money(MIN_RAISE)}.
+            </p>
           </>
         ) : (
           <p className="muted small">
-            Esperando pujas de {auction.pending.map((id) => nameOf(state, id)).join(', ')}.
+            {auction.pending.length > 0
+              ? `Esperando ofertas de ${auction.pending
+                  .map((id) => nameOf(state, id))
+                  .join(', ')}.`
+              : 'Cerrando la subasta…'}
           </p>
         )}
       </div>
@@ -721,12 +744,13 @@ export function CucupolyView({ state, me, players, dispatch }: GameViewProps<Cuc
     }
   }, [play])
 
-  // El anfitrión mueve el reloj de la subasta relámpago. Cada tic produce un
+  // El anfitrión mueve el reloj de la Puja Abierta. Cada tic produce un
   // snapshot; el temporizador se reprograma al cambiar el contador o la puja,
-  // así una mejora siempre regala los 5 tics completos.
+  // así una mejora siempre regala la cuenta regresiva completa.
   const isHost = state.order[0] === me.id
-  const openAuction =
-    state.phase === 'auction' && state.auction?.mode === 'open'
+  const openAuction = state.phase === 'auction' && state.auction?.mode === 'open'
+  const sealedAuction =
+    state.phase === 'auction' && state.auction?.mode === 'sealed'
   const auctionCountdown = state.auction?.countdown ?? 0
   const auctionLeader = state.auction?.leader ?? null
 
@@ -734,18 +758,88 @@ export function CucupolyView({ state, me, players, dispatch }: GameViewProps<Cuc
     if (!isHost || !openAuction) return
     const timer = window.setTimeout(() => {
       dispatch({ type: 'auction-tick' })
-    }, RULES.openAuctionTickMs)
+    }, AUCTION_TICK_MS)
     return () => window.clearTimeout(timer)
   }, [isHost, openAuction, auctionCountdown, auctionLeader, dispatch])
 
+  // Ofertas secretas: solo el anfitrión conoce los importes. Viven en un ref
+  // para que nunca entren al estado que se difunde a los invitados.
+  const secretBids = useRef<{ playerId: string; amount: number }[]>([])
+  useEffect(() => {
+    if (!isHost) return
+    return subscribeHostActions(({ action, playerId, ok }) => {
+      if (!ok || action.type !== 'secret-bid') return
+      const payload = action.payload
+      if (typeof payload !== 'object' || payload === null) return
+      const amount = (payload as Record<string, unknown>).amount
+      if (typeof amount !== 'number' || !Number.isInteger(amount) || amount < 0) return
+      secretBids.current = [
+        ...secretBids.current.filter((bid) => bid.playerId !== playerId),
+        { playerId, amount },
+      ]
+    })
+  }, [isHost])
+
   // El anfitrión sortea el evento inicial FUERA del reducer y lo aplica como
-  // acción; así el reducer sigue siendo puro y determinista.
+  // acción; así el reducer sigue siendo puro y determinista. Las subastas solo
+  // entran al sorteo si queda alguna propiedad sin dueño.
+  const drawnRound = useRef(0)
   useEffect(() => {
     if (!isHost || state.phase !== 'event' || state.initialEvent !== null) return
-    const eventId =
-      INITIAL_EVENT_POOL[Math.floor(Math.random() * INITIAL_EVENT_POOL.length)]
-    dispatch({ type: 'start-initial-event', payload: { eventId } })
-  }, [isHost, state.phase, state.initialEvent, dispatch])
+    if (drawnRound.current === state.roundNumber) return
+    drawnRound.current = state.roundNumber
+
+    const free = freeAuctionTiles(state.owners)
+    const pool = drawableEvents(state.owners)
+    const eventId = pool[Math.floor(Math.random() * pool.length)]
+    const tileId = isAuctionEvent(eventId)
+      ? free[Math.floor(Math.random() * free.length)]
+      : undefined
+    dispatch({ type: 'start-initial-event', payload: { eventId, tileId } })
+  }, [isHost, state.phase, state.initialEvent, state.owners, state.roundNumber, dispatch])
+
+  // La subasta abre cuando termina el anuncio. Si este cliente ya había visto
+  // el anuncio (recarga o reconexión), abre de inmediato.
+  const auctionEventSeq =
+    state.phase === 'event' && state.auction ? state.eventSeq : 0
+  useEffect(() => {
+    if (!isHost || !auctionEventSeq) return
+    const delay = hasSeenEvent(state.seed, auctionEventSeq)
+      ? 0
+      : EVENT_BANNER_MS + EVENT_BANNER_EXIT_MS
+    const timer = window.setTimeout(() => {
+      dispatch({ type: 'open-initial-auction' })
+    }, delay)
+    return () => window.clearTimeout(timer)
+  }, [isHost, auctionEventSeq, state.seed, dispatch])
+
+  // Cada Oferta Secreta empieza sin ofertas registradas.
+  useEffect(() => {
+    if (!sealedAuction) return
+    secretBids.current = []
+  }, [sealedAuction, state.eventSeq])
+
+  // Cuando todos respondieron, el anfitrión revela las ofertas al reducer.
+  const sealedPending = state.auction?.pending.length ?? 0
+  useEffect(() => {
+    if (!isHost || !sealedAuction || sealedPending > 0) return
+    dispatch({
+      type: 'resolve-secret-auction',
+      payload: { bids: secretBids.current.map((bid) => ({ ...bid })) },
+    })
+  }, [isHost, sealedAuction, sealedPending, dispatch])
+
+  // Cierre forzoso de la Oferta Secreta al vencer AUCTION_SECRET_MS.
+  useEffect(() => {
+    if (!isHost || !sealedAuction) return
+    const timer = window.setTimeout(() => {
+      dispatch({
+        type: 'resolve-secret-auction',
+        payload: { bids: secretBids.current.map((bid) => ({ ...bid })) },
+      })
+    }, AUCTION_SECRET_MS)
+    return () => window.clearTimeout(timer)
+  }, [isHost, sealedAuction, state.eventSeq, dispatch])
 
   // Anuncio del evento inicial: se dispara con `eventSeq` una sola vez por
   // cliente. `sessionStorage` evita repetirlo al reconectar o recargar.

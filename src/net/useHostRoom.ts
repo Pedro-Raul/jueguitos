@@ -16,6 +16,7 @@ import {
   type HostMessage,
   type RoomSnapshot,
 } from './protocol'
+import { publishHostAction } from './hostActions'
 
 export type HostRoom = {
   snapshot: RoomSnapshot
@@ -168,9 +169,11 @@ export function useHostRoom(code: string, game: GameDefinition<any>, me: Profile
 
       const result = gameRef.current.reduce(room.state, action as GameAction, playerId)
       if (isGameError(result)) {
+        publishHostAction({ action: action as GameAction, playerId, ok: false })
         send(conn, { kind: 'rejected', message: result.error })
         return
       }
+      publishHostAction({ action: action as GameAction, playerId, ok: true })
       commit({ ...room, state: result })
     }
 
@@ -231,9 +234,11 @@ export function useHostRoom(code: string, game: GameDefinition<any>, me: Profile
 
       const result = gameRef.current.reduce(room.state, action, meRef.current.id)
       if (isGameError(result)) {
+        publishHostAction({ action, playerId: meRef.current.id, ok: false })
         setError(result.error)
         return
       }
+      publishHostAction({ action, playerId: meRef.current.id, ok: true })
       commit({ ...room, state: result })
     },
     [commit],
