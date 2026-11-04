@@ -10,7 +10,7 @@ type Props = {
 }
 
 export function GuestRoomScreen({ code, me, onLeave }: Props) {
-  const { snapshot, seatId, status, message, dispatch } = useGuestRoom(code, me)
+  const { snapshot, seatId, status, message, dispatch, privateData } = useGuestRoom(code, me)
 
   if (status === 'closed') {
     return (
@@ -55,6 +55,7 @@ export function GuestRoomScreen({ code, me, onLeave }: Props) {
       notice={status === 'reconnecting' ? 'Conexión perdida. Reintentando…' : message}
       onLeave={onLeave}
       dispatch={dispatch}
+      privateData={privateData}
     />
   )
 }

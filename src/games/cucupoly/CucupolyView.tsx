@@ -1,20 +1,15 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
 import type { GameAction, GameViewProps, Player } from '../../types'
 import { BOARD } from './board'
 import {
   AUCTION_NAMES,
-  TURN_ORDER_REVEAL_MS,
   rentFor,
   type CucupolyState,
   type TradeState,
 } from './engine'
 import {
   EVENTS,
-  EVENT_BANNER_EXIT_MS,
-  EVENT_BANNER_MS,
   AUCTION_OPEN_IDLE_TICKS,
-  AUCTION_SECRET_MS,
-  AUCTION_TICK_MS,
   MIN_RAISE,
   discountRoundsLeft,
   drawableEvents,
@@ -27,8 +22,21 @@ import {
   type InitialEventId,
 } from './events'
 import { planAnimations, snapshotSeen, type RollPlan, type SeenRoll } from './planAnimations'
-import { DICE_SECONDS } from './three/layout'
+import {
+  AUCTION_SECRET_MS,
+  AUCTION_TICK_MS,
+  DICE_BANNER_MS,
+  DICE_SECONDS,
+  END_OF_TURN_PAUSE_MS,
+  EVENT_BANNER_EXIT_MS,
+  EVENT_BANNER_MS,
+  PACE,
+  TURN_ORDER_REVEAL_MS,
+} from './timing'
+import { NoticeTicker, useNoticeQueue } from './NoticeTicker'
+import type { Notice } from './notices'
 import { RULES } from './rules.config'
+import { Table31Panel } from './Table31Panel'
 import { subscribeHostActions } from '../../net/hostActions'
 import {
   groupNameFor,
@@ -112,11 +120,8 @@ function mustAct(state: CucupolyState, meId: string): boolean {
     case 'waiting-roll':
       return isMyTurn
     case 'thirty-one': {
-      const table = state.table31
-      if (!table) return false
-      return table.stage === 'bets'
-        ? table.pendingBets.includes(meId)
-        : table.drawOrder[table.drawIndex] === meId
+      // La mesa del 31 se muestra siempre y gestiona sus propias acciones.
+      return false
     }
     case 'trade': {
       const trade = state.trade
@@ -127,6 +132,29 @@ function mustAct(state: CucupolyState, meId: string): boolean {
     default:
       return isMyTurn
   }
+}
+
+/** Fases en las que el turno ya está en juego (para la pausa de fin de turno). */
+function isTurnPhase(phase: CucupolyState['phase']): boolean {
+  return (
+    phase === 'waiting-roll' ||
+    phase === 'buy-decision' ||
+    phase === 'auction' ||
+    phase === 'thirty-one' ||
+    phase === 'trade' ||
+    phase === 'bus-move'
+  )
+}
+
+/** Indicador flotante junto al saldo del jugador afectado por el aviso actual. */
+function moneyChip(
+  notice: Notice | null,
+  playerId: string,
+): { text: string; positive: boolean } | null {
+  if (!notice || notice.kind !== 'money' || notice.amount === undefined) return null
+  if (notice.from === playerId) return { text: `−${money(notice.amount)}`, positive: false }
+  if (notice.to === playerId) return { text: `+${money(notice.amount)}`, positive: true }
+  return null
 }
 
 function actionIcon(state: CucupolyState): string {
@@ -198,7 +226,6 @@ type PanelProps = {
 
 function ActionPanel({ state, me, dispatch }: PanelProps) {
   const [bid, setBid] = useState('')
-  const [bet, setBet] = useState('')
   const [tradeTo, setTradeTo] = useState('')
   const [giveTiles, setGiveTiles] = useState<number[]>([])
   const [getTiles, setGetTiles] = useState<number[]>([])
@@ -395,80 +422,6 @@ function ActionPanel({ state, me, dispatch }: PanelProps) {
             No comprar
           </button>
         </div>
-      </div>
-    )
-  }
-
-  if (state.phase === 'thirty-one' && state.table31) {
-    const table = state.table31
-    if (table.stage === 'bets') {
-      const waiting = table.pendingBets.includes(me.id)
-      return (
-        <div className="cp-action">
-          <p>Mesa de 31: apuesta hasta {money(RULES.table31BetLimit)}.</p>
-          {waiting ? (
-            <>
-              <input
-                type="number"
-                min={1}
-                max={Math.min(RULES.table31BetLimit, myMoney)}
-                value={bet}
-                placeholder="Apuesta"
-                onChange={(event) => setBet(event.target.value)}
-              />
-              <div className="actions">
-                <button
-                  className="primary"
-                  type="button"
-                  disabled={bet === ''}
-                  onClick={() => {
-                    dispatch({ type: 'join-table', payload: { bet: Number(bet) } })
-                    setBet('')
-                  }}
-                >
-                  Sentarse
-                </button>
-                <button
-                  className="ghost"
-                  type="button"
-                  onClick={() => dispatch({ type: 'pass-table' })}
-                >
-                  No jugar
-                </button>
-              </div>
-            </>
-          ) : (
-            <p className="muted small">Esperando decisiones…</p>
-          )}
-        </div>
-      )
-    }
-
-    const drawer = table.drawOrder[table.drawIndex]
-    return (
-      <div className="cp-action">
-        <ul className="cp-hands">
-          {table.participants.map((id) => (
-            <li key={id}>
-              <span>{nameOf(state, id)}</span>
-              <strong>{table.hands[id] ?? 0}</strong>
-              {table.busted.includes(id) ? <em>pasado</em> : null}
-              {table.standing.includes(id) ? <em>planta</em> : null}
-            </li>
-          ))}
-        </ul>
-        {drawer === me.id ? (
-          <div className="actions">
-            <button className="primary" type="button" onClick={() => dispatch({ type: 'draw-card' })}>
-              Pedir carta
-            </button>
-            <button className="ghost" type="button" onClick={() => dispatch({ type: 'stand' })}>
-              Plantarse
-            </button>
-          </div>
-        ) : (
-          <p className="muted small">Turno de {nameOf(state, drawer)} en la mesa.</p>
-        )}
       </div>
     )
   }
@@ -748,7 +701,14 @@ function TileSheet({
   )
 }
 
-export function CucupolyView({ state, me, players, dispatch }: GameViewProps<CucupolyState>) {
+export function CucupolyView({
+  state,
+  me,
+  players,
+  dispatch,
+  privateData,
+  sendPrivate,
+}: GameViewProps<CucupolyState>) {
   const [selected, setSelected] = useState<number | null>(null)
   const [busy, setBusy] = useState(false)
   const [play, setPlay] = useState<RollPlan | null>(null)
@@ -756,8 +716,11 @@ export function CucupolyView({ state, me, players, dispatch }: GameViewProps<Cuc
   const [banner, setBanner] = useState<string | null>(null)
   const [eventBanner, setEventBanner] = useState<InitialEventId | null>(null)
   const [eventLeaving, setEventLeaving] = useState(false)
+  const [turnPause, setTurnPause] = useState(false)
   const seenRoll = useRef<SeenRoll | null>(null)
   const seenEventSeq = useRef(0)
+  const turnKey = `${state.turnNumber}:${state.currentIndex}`
+  const lastTurnKey = useRef(turnKey)
 
   const current =
     state.phase === 'turn-order-roll' && state.turnOrderState
@@ -783,7 +746,7 @@ export function CucupolyView({ state, me, players, dispatch }: GameViewProps<Cuc
     setDiceBlocked(true)
   }
 
-  // Orden dados → ficha → botones: 1.2 s de dados, banner central 2 s.
+  // Orden dados → ficha → botones: dados, banner central y pausa de fin de turno.
   useEffect(() => {
     if (!play) return
     const text =
@@ -795,13 +758,28 @@ export function CucupolyView({ state, me, players, dispatch }: GameViewProps<Cuc
       setDiceBlocked(false)
       setBanner(text)
     }, diceMs)
-    const hide = window.setTimeout(() => setBanner(null), diceMs + 2000)
+    const hide = window.setTimeout(() => setBanner(null), diceMs + DICE_BANNER_MS)
     return () => {
       window.clearTimeout(settle)
       window.clearTimeout(hide)
       setBanner(null)
     }
   }, [play])
+
+  // El reducer avanza el turno al instante; el HUD espera a que terminen los
+  // dados y la caminata, y deja un respiro antes de habilitar al siguiente.
+  useEffect(() => {
+    if (lastTurnKey.current === turnKey) return
+    lastTurnKey.current = turnKey
+    if (!isTurnPhase(state.phase)) return
+    setTurnPause(true)
+  }, [turnKey, state.phase])
+
+  useEffect(() => {
+    if (!turnPause || diceBlocked || busy) return
+    const timer = window.setTimeout(() => setTurnPause(false), END_OF_TURN_PAUSE_MS)
+    return () => window.clearTimeout(timer)
+  }, [turnPause, diceBlocked, busy])
 
   // El anfitrión mueve el reloj de la Puja Abierta. Cada tic produce un
   // snapshot; el temporizador se reprograma al cambiar el contador o la puja,
@@ -942,6 +920,12 @@ export function CucupolyView({ state, me, players, dispatch }: GameViewProps<Cuc
     }
   }, [state.eventSeq, state.initialEvent, state.seed])
 
+  // Los avisos no compiten con los anuncios grandes (evento inicial, orden de
+  // turnos o victoria): la cola se congela hasta que el overlay desaparece.
+  const noticesPaused =
+    eventBanner !== null || state.phase === 'turn-order-reveal' || state.phase === 'finished'
+  const noticeQueue = useNoticeQueue(state.notices, state.noticeSeq, noticesPaused)
+
   const roll = play
     ? { values: play.values, total: play.total, seq: play.seq }
     : null
@@ -952,12 +936,17 @@ export function CucupolyView({ state, me, players, dispatch }: GameViewProps<Cuc
     ? diceBlocked
       ? 'Tirando los dados…'
       : 'Moviendo la ficha…'
-    : phaseHint(state)
-  const locked = animating
+    : turnPause
+      ? `${nameOf(state, current)} prepara su turno…`
+      : phaseHint(state)
+  const locked = animating || turnPause
   const acting = mustAct(state, me.id)
 
   return (
-    <div className="cp-stage">
+    <div
+      className="cp-stage"
+      style={{ '--cp-pace': String(PACE) } as CSSProperties}
+    >
       <div className="cp-canvas">
         <Suspense fallback={<div className="cp-loading">Cargando tablero 3D…</div>}>
           <BoardScene
@@ -1031,6 +1020,7 @@ export function CucupolyView({ state, me, players, dispatch }: GameViewProps<Cuc
             const player = players.find((candidate) => candidate.id === id)
             const out = state.bankrupt.includes(id)
             const rolled = state.turnOrderState?.rolls[id]
+            const chip = moneyChip(noticeQueue.current, id)
             return (
               <article
                 key={id}
@@ -1051,6 +1041,15 @@ export function CucupolyView({ state, me, players, dispatch }: GameViewProps<Cuc
                   </span>
                   <span className="cp-pmoney">
                     {out ? 'eliminado' : money(state.money[id] ?? 0)}
+                    {chip ? (
+                      <span
+                        key={noticeQueue.current?.id}
+                        className={`cp-money-chip ${chip.positive ? 'is-in' : 'is-out'}`}
+                        aria-hidden="true"
+                      >
+                        {chip.text}
+                      </span>
+                    ) : null}
                   </span>
                 </div>
               </article>
@@ -1075,14 +1074,16 @@ export function CucupolyView({ state, me, players, dispatch }: GameViewProps<Cuc
           ) : null}
         </div>
 
-        {!acting && state.phase !== 'finished' ? (
+        <NoticeTicker notice={noticeQueue.current} />
+
+        {(!acting || turnPause) && state.phase !== 'finished' ? (
           <div className="cp-dock" role="status">
             {statusHint}
           </div>
         ) : null}
       </header>
 
-      {acting && !animating ? (
+      {acting && !animating && !turnPause ? (
         <div className="cp-action-backdrop">
           <section
             className="cp-action-card"
@@ -1108,6 +1109,17 @@ export function CucupolyView({ state, me, players, dispatch }: GameViewProps<Cuc
             </fieldset>
           </section>
         </div>
+      ) : null}
+
+      {state.phase === 'thirty-one' && state.table31 && !animating ? (
+        <Table31Panel
+          state={state}
+          me={me}
+          players={players}
+          dispatch={dispatch}
+          privateData={privateData}
+          sendPrivate={sendPrivate}
+        />
       ) : null}
 
       {selected !== null ? (

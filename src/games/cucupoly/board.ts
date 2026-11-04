@@ -36,8 +36,8 @@ export const BOARD: Tile[] = [
   { index: 2, name: 'Tesoreria', type: 'treasury' },
   { index: 3, name: 'Los Estoraques', type: 'property', price: 60 },
   { index: 4, name: 'Impuesto', type: 'tax', tax: 50 },
-  { index: 5, name: 'Buseta Comicro', type: 'bus', price: 200 },
-  { index: 6, name: 'Ser. Agua', type: 'service', price: 200, service: 'water' },
+  { index: 5, name: 'Parque Mercedez', type: 'park' },
+  { index: 6, name: 'Buseta Comicro', type: 'bus', price: 200 },
   { index: 7, name: 'Parque lineal', type: 'park' },
   { index: 8, name: 'Belisario', type: 'property', price: 100 },
   { index: 9, name: 'Sorpresa', type: 'chance' },
@@ -48,9 +48,9 @@ export const BOARD: Tile[] = [
   { index: 14, name: 'Pastora', type: 'property', price: 140 },
   { index: 15, name: 'Ser. Luz', type: 'service', price: 200, service: 'electricity' },
   { index: 16, name: 'Belen', type: 'property', price: 160 },
-  { index: 17, name: 'Buseta Tonchala', type: 'bus', price: 200 },
-  { index: 18, name: 'Tesoreria', type: 'treasury' },
-  { index: 19, name: 'Parque Mercedez', type: 'park' },
+  { index: 17, name: 'Tesoreria', type: 'treasury' },
+  { index: 18, name: 'Buseta Tonchala', type: 'bus', price: 200 },
+  { index: 19, name: 'Ser. Agua', type: 'service', price: 200, service: 'water' },
   { index: 20, name: 'Las Americas', type: 'property', price: 180 },
   { index: 21, name: 'Sorpresa', type: 'chance' },
   { index: 22, name: 'Villas del Tejar', type: 'property', price: 180 },
@@ -62,7 +62,7 @@ export const BOARD: Tile[] = [
   { index: 28, name: 'El rosal', type: 'property', price: 240 },
   { index: 29, name: 'Parque Nacional', type: 'park' },
   { index: 30, name: 'Buseta Trasan', type: 'bus', price: 200 },
-  { index: 31, name: 'Sorpresa', type: 'chance' },
+  { index: 31, name: 'Parque Santander', type: 'park' },
   { index: 32, name: 'Caobos', type: 'property', price: 260 },
   { index: 33, name: 'La rivera', type: 'property', price: 260 },
   { index: 34, name: 'Ser. Tel', type: 'service', price: 200, service: 'telephone' },
@@ -73,17 +73,17 @@ export const BOARD: Tile[] = [
   { index: 39, name: 'Niza', type: 'property', price: 300 },
   { index: 40, name: 'Prados del Norte', type: 'property', price: 320 },
   { index: 41, name: 'Sitio de apuestas', type: 'betting' },
-  { index: 42, name: 'Buseta', type: 'bus', price: 200 },
+  { index: 42, name: 'Buseta Guasimales', type: 'bus', price: 200 },
   { index: 43, name: 'Impuesto', type: 'tax', tax: 200 },
   { index: 44, name: 'Prados del Este', type: 'property', price: 350 },
   { index: 45, name: 'Sorpresa', type: 'chance' },
   { index: 46, name: 'San Mateo', type: 'property', price: 400 },
-  { index: 47, name: 'Parque Santander', type: 'park' },
+  { index: 47, name: 'Sorpresa', type: 'chance' },
 ]
 
-export const BUS_TILES = [5, 17, 30, 42] as const
-export const SERVICE_TILES = [6, 15, 34] as const
-export const WATER_TILE = 6
+export const BUS_TILES = [6, 18, 30, 42] as const
+export const SERVICE_TILES = [19, 15, 34] as const
+export const WATER_TILE = 19
 export const ELECTRICITY_TILE = 15
 export const TELEPHONE_TILE = 34
 export const JAIL_TILE = 12

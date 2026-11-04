@@ -12,9 +12,22 @@ type Props = {
   onStart?: () => void
   onLeave: () => void
   dispatch: (action: GameAction) => void
+  privateData?: unknown
+  sendPrivate?: (targetId: string, data: unknown) => void
 }
 
-export function RoomView({ room, me, isHost, error, notice, onStart, onLeave, dispatch }: Props) {
+export function RoomView({
+  room,
+  me,
+  isHost,
+  error,
+  notice,
+  onStart,
+  onLeave,
+  dispatch,
+  privateData,
+  sendPrivate,
+}: Props) {
   const [copied, setCopied] = useState(false)
   const [copyError, setCopyError] = useState<string | null>(null)
 
@@ -38,7 +51,14 @@ export function RoomView({ room, me, isHost, error, notice, onStart, onLeave, di
         {error ? <p className="alert game-alert">{error}</p> : null}
         {notice ? <p className="alert game-alert">{notice}</p> : null}
         {game ? (
-          <game.View state={room.state} me={me} players={room.players} dispatch={dispatch} />
+          <game.View
+            state={room.state}
+            me={me}
+            players={room.players}
+            dispatch={dispatch}
+            privateData={privateData}
+            sendPrivate={sendPrivate}
+          />
         ) : (
           <p className="alert game-alert">El juego de esta sala ya no está disponible.</p>
         )}

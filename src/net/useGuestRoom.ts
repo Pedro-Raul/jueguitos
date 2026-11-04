@@ -13,6 +13,8 @@ export type GuestRoom = {
   status: GuestStatus
   message: string | null
   dispatch: (action: GameAction) => void
+  /** Último dato privado que el anfitrión envió a este asiento. */
+  privateData: unknown
 }
 
 const MAX_RETRIES = 3
@@ -47,6 +49,7 @@ export function useGuestRoom(code: string, profile: Profile): GuestRoom {
   const [snapshot, setSnapshot] = useState<RoomSnapshot | null>(null)
   const [status, setStatus] = useState<GuestStatus>('connecting')
   const [message, setMessage] = useState<string | null>(null)
+  const [privateData, setPrivateData] = useState<unknown>(null)
 
   const connRef = useRef<DataConnection | null>(null)
   const statusRef = useRef<GuestStatus>('connecting')
@@ -147,6 +150,8 @@ export function useGuestRoom(code: string, profile: Profile): GuestRoom {
           setSnapshot(incoming.room)
           setStatus('connected')
           setMessage(null)
+        } else if (incoming.kind === 'private') {
+          setPrivateData(incoming.data)
         } else if (incoming.kind === 'rejected') {
           setMessage(incoming.message)
         } else if (incoming.kind === 'closed') {
@@ -220,5 +225,5 @@ export function useGuestRoom(code: string, profile: Profile): GuestRoom {
     }
   }, [code, profile, seatId])
 
-  return { snapshot, seatId, status, message, dispatch }
+  return { snapshot, seatId, status, message, dispatch, privateData }
 }

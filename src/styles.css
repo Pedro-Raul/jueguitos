@@ -688,10 +688,55 @@ button {
 }
 
 .cp-pmoney {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   font-size: 0.8rem;
   font-weight: 900;
   font-variant-numeric: tabular-nums;
   color: var(--primary-dark);
+}
+
+.cp-money-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 5px;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 900;
+  line-height: 1.5;
+  white-space: nowrap;
+  animation: cp-money-pop calc(2400ms * var(--cp-pace, 1)) ease-out forwards;
+}
+
+.cp-money-chip.is-in {
+  color: #166534;
+  background: #d9f2e0;
+  border: 1px solid #9ed7ae;
+}
+
+.cp-money-chip.is-out {
+  color: #9f1239;
+  background: #ffe0e6;
+  border: 1px solid #f7a8b8;
+}
+
+@keyframes cp-money-pop {
+  0% {
+    opacity: 0;
+    transform: translateY(4px) scale(0.8);
+  }
+  12% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  75% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.95);
+  }
 }
 
 .cp-roll-chip {
@@ -747,6 +792,69 @@ button {
   max-width: 26ch;
 }
 
+/* Cola de avisos temporales: un hueco fijo dentro del HUD. */
+.cp-notice-slot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 36px;
+  pointer-events: none;
+}
+
+.cp-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  max-width: min(92vw, 560px);
+  padding: 7px 14px;
+  border-radius: 12px;
+  border: 2px solid rgba(255, 255, 255, 0.22);
+  background: rgba(12, 24, 17, 0.92);
+  color: #f7f1e2;
+  font-size: 0.82rem;
+  font-weight: 750;
+  line-height: 1.25;
+  text-align: left;
+  box-shadow: 0 4px 0 rgba(0, 0, 0, 0.32);
+  animation: cp-notice-in calc(240ms * var(--cp-pace, 1)) ease-out;
+}
+
+.cp-notice-money {
+  border-color: #e2c185;
+  background: rgba(60, 43, 12, 0.94);
+  color: #ffe6ad;
+}
+
+.cp-notice-rule {
+  border-color: #8ab6ff;
+  background: rgba(18, 38, 66, 0.94);
+  color: #dbe9ff;
+}
+
+.cp-notice-event {
+  border-color: #9ed7ae;
+  background: rgba(14, 48, 30, 0.94);
+  color: #d9f2e0;
+}
+
+.cp-notice-icon {
+  flex: none;
+  font-size: 1rem;
+  line-height: 1.2;
+}
+
+@keyframes cp-notice-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
 .cp-eyebrow {
   font-size: 0.64rem;
   font-weight: 800;
@@ -791,7 +899,7 @@ button {
   pointer-events: none;
   box-shadow: 0 6px 0 rgba(0, 0, 0, 0.32);
   backdrop-filter: blur(4px);
-  animation: cp-banner-in 170ms ease-out;
+  animation: cp-banner-in calc(170ms * var(--cp-pace, 1)) ease-out;
 }
 
 @keyframes cp-banner-in {
@@ -821,7 +929,7 @@ button {
     rgba(6, 12, 9, 0.82)
   );
   pointer-events: none;
-  animation: cp-event-fade-in 220ms ease-out;
+  animation: cp-event-fade-in calc(220ms * var(--cp-pace, 1)) ease-out;
 }
 
 .cp-event-card {
@@ -838,7 +946,7 @@ button {
   text-align: center;
   box-shadow: 0 12px 0 rgba(0, 0, 0, 0.35);
   backdrop-filter: blur(6px);
-  animation: cp-event-pop 260ms cubic-bezier(0.2, 0.9, 0.3, 1.3);
+  animation: cp-event-pop calc(260ms * var(--cp-pace, 1)) cubic-bezier(0.2, 0.9, 0.3, 1.3);
 }
 
 .cp-event-card .cp-eyebrow {
@@ -905,11 +1013,11 @@ button {
 }
 
 .cp-event-overlay.is-leaving {
-  animation: cp-event-fade-out 400ms ease-in forwards;
+  animation: cp-event-fade-out calc(400ms * var(--cp-pace, 1)) ease-in forwards;
 }
 
 .cp-event-overlay.is-leaving .cp-event-card {
-  animation: cp-event-pop-out 400ms ease-in forwards;
+  animation: cp-event-pop-out calc(400ms * var(--cp-pace, 1)) ease-in forwards;
 }
 
 @keyframes cp-event-fade-in {
@@ -1010,7 +1118,7 @@ button {
   border: 2px solid var(--line);
   background: var(--surface);
   box-shadow: 0 9px 0 rgba(0, 0, 0, 0.35), 0 22px 40px rgba(0, 0, 0, 0.45);
-  animation: cp-pop-in 200ms ease-out;
+  animation: cp-pop-in calc(200ms * var(--cp-pace, 1)) ease-out;
 }
 
 .cp-action-head {
@@ -1077,7 +1185,7 @@ button {
   box-shadow: 0 8px 0 rgba(0, 0, 0, 0.35);
   backdrop-filter: blur(4px);
   pointer-events: none;
-  animation: cp-pop-in 220ms ease-out;
+  animation: cp-pop-in calc(220ms * var(--cp-pace, 1)) ease-out;
 }
 
 .cp-winner p {
@@ -1361,6 +1469,322 @@ button {
   text-align: right;
 }
 
+/* ---------- Mesa de 31 ---------- */
+
+.cp-table31-backdrop {
+  place-items: center;
+  padding: 12px;
+}
+
+.cp-table31 {
+  width: min(100%, 680px);
+  max-height: min(78dvh, 720px);
+  gap: 10px;
+}
+
+.cp-table31-head {
+  align-items: flex-start;
+}
+
+.cp-table31-pot {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: #fdf1cf;
+  border: 2px solid #e9c46a;
+  font-size: 0.8rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.cp-table31-pot strong {
+  font-variant-numeric: tabular-nums;
+}
+
+.cp-table31-lead {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.cp-table31-bet {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.cp-table31-bet input {
+  width: 120px;
+}
+
+.cp-table31-bet-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.82rem;
+}
+
+.cp-table31-bet-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 10px;
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+
+.cp-table31-players {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+}
+
+.cp-table31-player {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border-radius: 14px;
+  border: 2px solid transparent;
+  background: var(--surface-2);
+  transition: border-color 180ms ease, background-color 180ms ease;
+}
+
+.cp-table31-player.is-me {
+  border-color: var(--primary);
+  background: #eef7f0;
+}
+
+.cp-table31-player.is-busted {
+  border-color: #d98b8b;
+  background: #fbeeee;
+}
+
+.cp-table31-player.is-winner {
+  border-color: var(--accent);
+  background: #fff6dd;
+  animation: cp31-winner 1200ms ease-in-out 2;
+}
+
+.cp-table31-player-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.cp-table31-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cp-table31-ready {
+  margin-left: auto;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: #d9f2e0;
+  border: 1px solid #9ed7ae;
+  color: #166534;
+  font-size: 0.62rem;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.cp-table31-cards {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-height: 40px;
+}
+
+.cp-card {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 40px;
+  border-radius: 6px;
+  border: 2px solid var(--line);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.95rem;
+  font-weight: 900;
+  animation: cp31-deal var(--cp31-deal, 420ms) ease-out both;
+}
+
+.cp-card.is-revealed {
+  animation: cp31-flip calc(var(--cp31-deal, 420ms) * 1.4) ease-out both;
+}
+
+.cp-card-back {
+  display: inline-block;
+  width: 24px;
+  height: 34px;
+  border-radius: 5px;
+  border: 2px solid #1d5136;
+  background: repeating-linear-gradient(45deg, #2f7a52, #2f7a52 4px, #1d5136 4px, #1d5136 8px);
+  box-shadow: inset 0 0 0 2px var(--bg);
+  animation: cp31-deal var(--cp31-deal, 420ms) ease-out both;
+}
+
+.cp-table31-count,
+.cp-table31-empty {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.cp-table31-total {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.cp-table31-total strong {
+  font-size: 1.3rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.cp-table31-busted,
+.cp-table31-winner {
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 0.62rem;
+  font-weight: 900;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.cp-table31-busted {
+  background: #ffe0e6;
+  color: #9f1239;
+}
+
+.cp-table31-winner {
+  background: #ffe9b8;
+  color: #8a5a00;
+}
+
+.cp-table31-actions {
+  display: flex;
+  justify-content: center;
+}
+
+.cp-table31-result {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 8px;
+  border-top: 2px dashed var(--line);
+  font-size: 0.85rem;
+}
+
+.cp-table31-result p {
+  margin: 0;
+}
+
+.cp-table31-payouts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.cp-table31-payouts li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid #e9c46a;
+  background: #fff6dd;
+  font-size: 0.8rem;
+}
+
+.cp-table31-coins {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  pointer-events: none;
+}
+
+.cp-table31-coin {
+  position: absolute;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: #ffd75e;
+  color: #5b3d00;
+  font-size: 0.78rem;
+  font-weight: 900;
+  box-shadow: 0 3px 0 rgba(0, 0, 0, 0.25);
+  animation-name: cp31-coin;
+  animation-timing-function: cubic-bezier(0.35, 0.05, 0.3, 1);
+  animation-fill-mode: forwards;
+}
+
+@keyframes cp31-deal {
+  from {
+    opacity: 0;
+    transform: translateY(-14px) rotate(-8deg) scale(0.8);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes cp31-flip {
+  0% {
+    opacity: 0;
+    transform: rotateY(180deg) scale(0.85);
+  }
+  60% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 1;
+    transform: rotateY(0) scale(1);
+  }
+}
+
+@keyframes cp31-coin {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.6);
+  }
+  15% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(calc(-50% + var(--cp31-dx, 0px)), calc(-50% + var(--cp31-dy, 0px)))
+      scale(1.05);
+  }
+}
+
+@keyframes cp31-winner {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(233, 165, 61, 0);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgba(233, 165, 61, 0.45);
+  }
+}
+
 /* ---------- Responsive ---------- */
 
 @media (max-width: 760px) {
@@ -1454,6 +1878,12 @@ button {
 
   .cp-turnbanner {
     max-width: 100%;
+  }
+
+  .cp-notice {
+    max-width: 100%;
+    padding: 6px 9px;
+    font-size: 0.74rem;
   }
 
   .cp-dock {

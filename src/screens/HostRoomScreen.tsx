@@ -38,7 +38,7 @@ type SessionProps = {
 function HostSession({ game, me, onLeave }: SessionProps) {
   // The code is generated once per room and never changes.
   const [code] = useState(generateRoomCode)
-  const { snapshot, error, start, dispatch } = useHostRoom(code, game, me)
+  const { snapshot, error, start, dispatch, sendPrivate } = useHostRoom(code, game, me)
 
   const hostPlayer = snapshot.players.find((player) => player.id === me.id) ?? {
     ...me,
@@ -55,6 +55,7 @@ function HostSession({ game, me, onLeave }: SessionProps) {
       onStart={start}
       onLeave={onLeave}
       dispatch={dispatch}
+      sendPrivate={sendPrivate}
     />
   )
 }

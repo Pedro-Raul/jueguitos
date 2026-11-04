@@ -1,4 +1,8 @@
 import { gridPosition } from '../board'
+import { DICE_SECONDS, HOP_SECONDS } from '../timing'
+
+// Los tiempos viven en `timing.ts`; se reexportan para las escenas 3D.
+export { DICE_SECONDS, HOP_SECONDS }
 
 /** Lado de una casilla en unidades del mundo. */
 export const CELL = 1
@@ -6,12 +10,8 @@ export const CELL = 1
 export const TILE_TOP = 0.22
 /** Desplazamiento del tablero para dejar aire arriba y abajo. */
 export const BOARD_OFFSET_Z = 0
-/** Duración de cada salto de ficha. */
-export const HOP_SECONDS = 0.18
 /** Altura del arco de cada salto. */
 export const HOP_HEIGHT = 0.45
-/** Duración de la animación de dados (igual en la escena y en el HUD). */
-export const DICE_SECONDS = 1.2
 
 export function tileWorld(index: number): [number, number, number] {
   const { column, row } = gridPosition(index)

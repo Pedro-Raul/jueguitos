@@ -23,6 +23,8 @@ export type HostRoom = {
   error: string | null
   start: () => void
   dispatch: (action: GameAction) => void
+  /** Envía datos privados a un asiento concreto; nunca pasan por el snapshot. */
+  sendPrivate: (targetId: string, data: unknown) => void
 }
 
 function initialSnapshot(
@@ -244,5 +246,12 @@ export function useHostRoom(code: string, game: GameDefinition<any>, me: Profile
     [commit],
   )
 
-  return { snapshot, error, start, dispatch }
+  const sendPrivate = useCallback((targetId: string, data: unknown) => {
+    const conn = connsRef.current.get(targetId)
+    if (!conn?.open) return
+    const message: HostMessage = { kind: 'private', gameId: gameRef.current.id, data }
+    conn.send(message)
+  }, [])
+
+  return { snapshot, error, start, dispatch, sendPrivate }
 }

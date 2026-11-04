@@ -32,6 +32,8 @@ function makeState(overrides: Overrides = {}): CucupolyState {
     table31: null,
     trade: null,
     log: [],
+    notices: [],
+    noticeSeq: 0,
     winner: null,
     rollSeq: 0,
     ...overrides,

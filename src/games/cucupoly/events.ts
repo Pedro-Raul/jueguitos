@@ -1,4 +1,22 @@
 import { BOARD } from './board'
+import {
+  AUCTION_OPEN_IDLE_TICKS,
+  AUCTION_OPEN_IDLE_MS,
+  AUCTION_SECRET_MS,
+  AUCTION_TICK_MS,
+  EVENT_BANNER_EXIT_MS,
+  EVENT_BANNER_MS,
+} from './timing'
+
+// Los tiempos viven en `timing.ts`; se reexportan aquí para no romper imports.
+export {
+  AUCTION_OPEN_IDLE_TICKS,
+  AUCTION_OPEN_IDLE_MS,
+  AUCTION_SECRET_MS,
+  AUCTION_TICK_MS,
+  EVENT_BANNER_EXIT_MS,
+  EVENT_BANNER_MS,
+}
 
 /**
  * Eventos de Cucupoly. El sorteo y el orden de llegada de las ofertas los
@@ -54,30 +72,16 @@ export const EVENTS: Record<InitialEventId, EventDefinition> = {
   },
 }
 
-/** Tiempo mínimo que el anuncio permanece completo en pantalla. */
-export const EVENT_BANNER_MS = 5000
-/** Duración de la salida animada del anuncio. */
-export const EVENT_BANNER_EXIT_MS = 400
-
 /** Primera y última ronda en las que aplica la Semana de descuentos. */
 export const DISCOUNT_FIRST_ROUND = 3
 export const DISCOUNT_LAST_ROUND = 5
 
 /**
- * SUPUESTO: constantes de las subastas de evento. Se ajustan juntas aquí.
- * - `AUCTION_SECRET_MS`: tiempo máximo de la Oferta Secreta.
- * - `AUCTION_OPEN_IDLE_MS`: cuenta regresiva de la Puja Abierta sin pujas.
+ * SUPUESTO: valores de las subastas de evento.
  * - `MIN_RAISE`: puja mínima y mejora mínima sobre el líder.
+ * Los tiempos (Oferta Secreta, Puja Abierta y tics) viven en `timing.ts`.
  */
-export const AUCTION_SECRET_MS = 20000
-export const AUCTION_OPEN_IDLE_MS = 10000
 export const MIN_RAISE = 10
-/** Granularidad del reloj de la Puja Abierta. */
-export const AUCTION_TICK_MS = 1000
-export const AUCTION_OPEN_IDLE_TICKS = Math.max(
-  1,
-  Math.round(AUCTION_OPEN_IDLE_MS / AUCTION_TICK_MS),
-)
 
 export function isInitialEventId(value: unknown): value is InitialEventId {
   return typeof value === 'string' && (INITIAL_EVENT_POOL as readonly string[]).includes(value)

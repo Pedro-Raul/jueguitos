@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { BOARD } from './board'
+import { BOARD, BUS_TILES, WATER_TILE } from './board'
 import {
   NEUTRAL_TILE_COLOR,
   TILE_COLORS,
@@ -36,7 +36,7 @@ describe('colores del tablero', () => {
     expect(TILE_COLORS[40]).toBe('#93C47D')
     expect(TILE_COLORS[44]).toBe('#0000FF')
     expect(TILE_COLORS[46]).toBe('#0000FF')
-    expect([5, 17, 30, 42].map((index) => TILE_COLORS[index])).toEqual([
+    expect(BUS_TILES.map((index) => TILE_COLORS[index])).toEqual([
       '#CCCCCC',
       '#CCCCCC',
       '#CCCCCC',
@@ -62,7 +62,7 @@ describe('colores del tablero', () => {
     expect(groupNameFor(BOARD[32])).toBe('Amarillo')
     expect(groupNameFor(BOARD[38])).toBe('Verde')
     expect(groupNameFor(BOARD[44])).toBe('Azul')
-    expect(groupNameFor(BOARD[5])).toBe('Busetas')
+    expect(groupNameFor(BOARD[BUS_TILES[0]])).toBe('Busetas')
     expect(groupNameFor(BOARD[12])).toBe('Cárcel')
     expect(groupNameFor(BOARD[0])).toBe('Especial')
   })
@@ -130,8 +130,8 @@ describe('íconos de casillas especiales', () => {
     expect(tileIcon(BOARD[41])).toBe('🎰')
     expect(tileIcon(BOARD[12])).toBe('🔒')
     expect(tileIcon(BOARD[36])).toBe('👮')
-    expect(tileIcon(BOARD[5])).toBe('🚌')
-    expect(tileIcon(BOARD[6])).toBe('💧')
+    expect(tileIcon(BOARD[BUS_TILES[0]])).toBe('🚌')
+    expect(tileIcon(BOARD[WATER_TILE])).toBe('💧')
     expect(tileIcon(BOARD[15])).toBe('⚡')
     expect(tileIcon(BOARD[34])).toBe('📞')
     expect(tileIcon(BOARD[1])).toBeNull()

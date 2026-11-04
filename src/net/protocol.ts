@@ -20,6 +20,7 @@ export type GuestMessage =
 
 export type HostMessage =
   | { kind: 'snapshot'; room: RoomSnapshot }
+  | { kind: 'private'; gameId: string; data: unknown }
   | { kind: 'rejected'; message: string }
   | { kind: 'closed'; message: string }
 
