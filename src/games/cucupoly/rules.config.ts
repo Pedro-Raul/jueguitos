@@ -36,12 +36,12 @@ export const RULES = {
   serviceMultipliers: [4, 10, 15],
   /** SUPUESTO: dinero que reparte Impulso Económico a cada jugador activo. */
   initialEventBoost: 250,
-  /** SUPUESTO: apuesta máxima por jugador en la mesa de 31. */
-  table31BetLimit: 100,
-  /** SUPUESTO: objetivo de la mesa de 31. */
-  table31Target: 31,
-  /** SUPUESTO: las cartas de la mesa de 31 valen entre 1 y 11. */
-  table31CardMax: 11,
+  /** SUPUESTO: apuesta máxima por jugador en la mesa de 21. */
+  table21BetLimit: 100,
+  /** SUPUESTO: objetivo de la mesa de 21; superarlo es pasarse. */
+  table21Target: 21,
+  /** SUPUESTO: las cartas de la mesa de 21 valen entre 1 y 11. */
+  table21CardMax: 11,
   /** SUPUESTO: Abastecimiento sube un 15% las rentas del dueño. */
   waterRentBonus: 0.15,
   /** SUPUESTO: duración de una habilidad, en rondas. */

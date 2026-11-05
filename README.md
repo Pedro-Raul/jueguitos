@@ -36,7 +36,7 @@ npm test          # tests con Vitest
 5. En la pestaña A pulsa **Iniciar partida**: arranca la **subasta sorpresa** inicial. En cada
    pestaña puja (mínimo el 75% del precio) o pulsa **Pasar**; la subasta termina cuando todos
    han decidido.
-6. Juega unos turnos: **Tirar dados**, decidir compras, caer en Sorpresa (mesa de 31, 1 dado o 3
+6. Juega unos turnos: **Tirar dados**, decidir compras, caer en Sorpresa (mesa de 21, 1 dado o 3
    dados) y en Tesorería. Comprueba que las dos pantallas muestran el mismo dinero y las mismas
    fichas.
 7. Con un servicio en propiedad, en tu turno pulsa **Activar** en el panel de Habilidades y revisa

@@ -44,7 +44,7 @@ import {
 import { NoticeTicker, useNoticeQueue } from './NoticeTicker'
 import type { Notice } from './notices'
 import { RULES } from './rules.config'
-import { Table31Panel } from './Table31Panel'
+import { Table21Panel } from './Table21Panel'
 import { subscribeHostActions } from '../../net/hostActions'
 import {
   groupNameFor,
@@ -98,8 +98,8 @@ function phaseHint(state: CucupolyState): string {
       const total = auction.registered.length + auction.pending.length
       return `${name} de ${BOARD[auction.tileId].name} · ${auction.registered.length}/${total} ofertas.`
     }
-    case 'thirty-one':
-      return 'Mesa de 31 en curso.'
+    case 'twenty-one':
+      return 'Mesa de 21 en curso.'
     case 'trade':
       return 'Trato pendiente.'
     case 'bus-move':
@@ -133,8 +133,8 @@ function mustAct(state: CucupolyState, meId: string): boolean {
     case 'bus-move':
     case 'waiting-roll':
       return isMyTurn
-    case 'thirty-one': {
-      // La mesa del 31 se muestra siempre y gestiona sus propias acciones.
+    case 'twenty-one': {
+      // La mesa del 21 se muestra siempre y gestiona sus propias acciones.
       return false
     }
     case 'trade': {
@@ -154,7 +154,7 @@ function isTurnPhase(phase: CucupolyState['phase']): boolean {
     phase === 'waiting-roll' ||
     phase === 'buy-decision' ||
     phase === 'auction' ||
-    phase === 'thirty-one' ||
+    phase === 'twenty-one' ||
     phase === 'trade' ||
     phase === 'bus-move'
   )
@@ -181,7 +181,7 @@ function actionIcon(state: CucupolyState): string {
       return '🏷️'
     case 'auction':
       return state.auction?.mode === 'open' ? '⚡' : '🔨'
-    case 'thirty-one':
+    case 'twenty-one':
       return '🃏'
     case 'trade':
       return '🤝'
@@ -202,8 +202,8 @@ function actionTitle(state: CucupolyState, me: Player): string {
       return 'Comprar o subastar'
     case 'auction':
       return state.auction ? AUCTION_NAMES[state.auction.mode] : 'Subasta'
-    case 'thirty-one':
-      return 'Mesa de 31'
+    case 'twenty-one':
+      return 'Mesa de 21'
     case 'trade':
       return 'Trato'
     case 'bus-move':
@@ -1223,8 +1223,8 @@ export function CucupolyView({
         </div>
       ) : null}
 
-      {state.phase === 'thirty-one' && state.table31 && !animating ? (
-        <Table31Panel
+      {state.phase === 'twenty-one' && state.table21 && !animating ? (
+        <Table21Panel
           state={state}
           me={me}
           players={players}

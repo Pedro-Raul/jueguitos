@@ -30,7 +30,7 @@ function makeState(overrides: Overrides = {}): CucupolyState {
     pendingBuy: null,
     pendingBus: null,
     auction: null,
-    table31: null,
+    table21: null,
     trade: null,
     log: [],
     notices: [],

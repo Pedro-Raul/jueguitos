@@ -1091,7 +1091,7 @@ button {
   pointer-events: none;
 }
 
-/* Modal de decisiones (compra, subasta, mesa 31, tratos, busetas) */
+/* Modal de decisiones (compra, subasta, mesa 21, tratos, busetas) */
 
 /* Barra de acciones: mitad inferior del área central, sin oscurecer el tablero. */
 .cp-action-backdrop {
@@ -1486,24 +1486,24 @@ button {
   text-align: right;
 }
 
-/* ---------- Mesa de 31 ---------- */
+/* ---------- Mesa de 21 ---------- */
 
-.cp-table31-backdrop {
+.cp-table21-backdrop {
   place-items: center;
   padding: 12px;
 }
 
-.cp-table31 {
+.cp-table21 {
   width: min(100%, 680px);
   max-height: min(78dvh, 720px);
   gap: 10px;
 }
 
-.cp-table31-head {
+.cp-table21-head {
   align-items: flex-start;
 }
 
-.cp-table31-pot {
+.cp-table21-pot {
   margin-left: auto;
   display: inline-flex;
   align-items: center;
@@ -1517,27 +1517,27 @@ button {
   white-space: nowrap;
 }
 
-.cp-table31-pot strong {
+.cp-table21-pot strong {
   font-variant-numeric: tabular-nums;
 }
 
-.cp-table31-lead {
+.cp-table21-lead {
   margin: 0;
   font-size: 0.9rem;
 }
 
-.cp-table31-bet {
+.cp-table21-bet {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 10px;
 }
 
-.cp-table31-bet input {
+.cp-table21-bet input {
   width: 120px;
 }
 
-.cp-table31-bet-list {
+.cp-table21-bet-list {
   list-style: none;
   margin: 0;
   padding: 0;
@@ -1547,7 +1547,7 @@ button {
   font-size: 0.82rem;
 }
 
-.cp-table31-bet-list li {
+.cp-table21-bet-list li {
   display: flex;
   justify-content: space-between;
   gap: 8px;
@@ -1556,13 +1556,13 @@ button {
   background: var(--surface-2);
 }
 
-.cp-table31-players {
+.cp-table21-players {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 8px;
 }
 
-.cp-table31-player {
+.cp-table21-player {
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -1573,23 +1573,23 @@ button {
   transition: border-color 180ms ease, background-color 180ms ease;
 }
 
-.cp-table31-player.is-me {
+.cp-table21-player.is-me {
   border-color: var(--primary);
   background: #eef7f0;
 }
 
-.cp-table31-player.is-busted {
+.cp-table21-player.is-busted {
   border-color: #d98b8b;
   background: #fbeeee;
 }
 
-.cp-table31-player.is-winner {
+.cp-table21-player.is-winner {
   border-color: var(--accent);
   background: #fff6dd;
-  animation: cp31-winner 1200ms ease-in-out 2;
+  animation: cp21-winner 1200ms ease-in-out 2;
 }
 
-.cp-table31-player-head {
+.cp-table21-player-head {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -1597,13 +1597,13 @@ button {
   font-weight: 800;
 }
 
-.cp-table31-name {
+.cp-table21-name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.cp-table31-ready {
+.cp-table21-ready {
   margin-left: auto;
   padding: 2px 6px;
   border-radius: 999px;
@@ -1616,7 +1616,7 @@ button {
   text-transform: uppercase;
 }
 
-.cp-table31-cards {
+.cp-table21-cards {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -1636,11 +1636,11 @@ button {
   color: var(--text);
   font-size: 0.95rem;
   font-weight: 900;
-  animation: cp31-deal var(--cp31-deal, 420ms) ease-out both;
+  animation: cp21-deal var(--cp21-deal, 420ms) ease-out both;
 }
 
 .cp-card.is-revealed {
-  animation: cp31-flip calc(var(--cp31-deal, 420ms) * 1.4) ease-out both;
+  animation: cp21-flip calc(var(--cp21-deal, 420ms) * 1.4) ease-out both;
 }
 
 .cp-card-back {
@@ -1651,29 +1651,29 @@ button {
   border: 2px solid #1d5136;
   background: repeating-linear-gradient(45deg, #2f7a52, #2f7a52 4px, #1d5136 4px, #1d5136 8px);
   box-shadow: inset 0 0 0 2px var(--bg);
-  animation: cp31-deal var(--cp31-deal, 420ms) ease-out both;
+  animation: cp21-deal var(--cp21-deal, 420ms) ease-out both;
 }
 
-.cp-table31-count,
-.cp-table31-empty {
+.cp-table21-count,
+.cp-table21-empty {
   font-size: 0.7rem;
   font-weight: 700;
   color: var(--muted);
 }
 
-.cp-table31-total {
+.cp-table21-total {
   display: flex;
   align-items: baseline;
   gap: 8px;
 }
 
-.cp-table31-total strong {
+.cp-table21-total strong {
   font-size: 1.3rem;
   font-variant-numeric: tabular-nums;
 }
 
-.cp-table31-busted,
-.cp-table31-winner {
+.cp-table21-busted,
+.cp-table21-winner {
   padding: 1px 6px;
   border-radius: 999px;
   font-size: 0.62rem;
@@ -1682,22 +1682,22 @@ button {
   text-transform: uppercase;
 }
 
-.cp-table31-busted {
+.cp-table21-busted {
   background: #ffe0e6;
   color: #9f1239;
 }
 
-.cp-table31-winner {
+.cp-table21-winner {
   background: #ffe9b8;
   color: #8a5a00;
 }
 
-.cp-table31-actions {
+.cp-table21-actions {
   display: flex;
   justify-content: center;
 }
 
-.cp-table31-result {
+.cp-table21-result {
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -1706,11 +1706,11 @@ button {
   font-size: 0.85rem;
 }
 
-.cp-table31-result p {
+.cp-table21-result p {
   margin: 0;
 }
 
-.cp-table31-payouts {
+.cp-table21-payouts {
   list-style: none;
   margin: 0;
   padding: 0;
@@ -1719,7 +1719,7 @@ button {
   gap: 6px;
 }
 
-.cp-table31-payouts li {
+.cp-table21-payouts li {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -1730,14 +1730,14 @@ button {
   font-size: 0.8rem;
 }
 
-.cp-table31-coins {
+.cp-table21-coins {
   position: fixed;
   inset: 0;
   z-index: 60;
   pointer-events: none;
 }
 
-.cp-table31-coin {
+.cp-table21-coin {
   position: absolute;
   padding: 4px 10px;
   border-radius: 999px;
@@ -1746,12 +1746,12 @@ button {
   font-size: 0.78rem;
   font-weight: 900;
   box-shadow: 0 3px 0 rgba(0, 0, 0, 0.25);
-  animation-name: cp31-coin;
+  animation-name: cp21-coin;
   animation-timing-function: cubic-bezier(0.35, 0.05, 0.3, 1);
   animation-fill-mode: forwards;
 }
 
-@keyframes cp31-deal {
+@keyframes cp21-deal {
   from {
     opacity: 0;
     transform: translateY(-14px) rotate(-8deg) scale(0.8);
@@ -1762,7 +1762,7 @@ button {
   }
 }
 
-@keyframes cp31-flip {
+@keyframes cp21-flip {
   0% {
     opacity: 0;
     transform: rotateY(180deg) scale(0.85);
@@ -1776,7 +1776,7 @@ button {
   }
 }
 
-@keyframes cp31-coin {
+@keyframes cp21-coin {
   0% {
     opacity: 0;
     transform: translate(-50%, -50%) scale(0.6);
@@ -1787,12 +1787,12 @@ button {
   }
   100% {
     opacity: 0;
-    transform: translate(calc(-50% + var(--cp31-dx, 0px)), calc(-50% + var(--cp31-dy, 0px)))
+    transform: translate(calc(-50% + var(--cp21-dx, 0px)), calc(-50% + var(--cp21-dy, 0px)))
       scale(1.05);
   }
 }
 
-@keyframes cp31-winner {
+@keyframes cp21-winner {
   0%,
   100% {
     box-shadow: 0 0 0 0 rgba(233, 165, 61, 0);

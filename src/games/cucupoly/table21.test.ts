@@ -1,28 +1,28 @@
 import { describe, expect, it } from 'vitest'
-import { parseTable31Private, table31Transfers } from './table31'
+import { parseTable21Private, table21Transfers } from './table21'
 import { RULES } from './rules.config'
 
-describe('mesa de 31: datos privados', () => {
-  it('acepta solo la forma { table31: { tableKey, cards } }', () => {
-    expect(parseTable31Private(null)).toBeNull()
-    expect(parseTable31Private({ cards: [1] })).toBeNull()
-    expect(parseTable31Private({ table31: { tableKey: '', cards: [] } })).toBeNull()
-    expect(parseTable31Private({ table31: { tableKey: 'k', cards: [0] } })).toBeNull()
+describe('mesa de 21: datos privados', () => {
+  it('acepta solo la forma { table21: { tableKey, cards } }', () => {
+    expect(parseTable21Private(null)).toBeNull()
+    expect(parseTable21Private({ cards: [1] })).toBeNull()
+    expect(parseTable21Private({ table21: { tableKey: '', cards: [] } })).toBeNull()
+    expect(parseTable21Private({ table21: { tableKey: 'k', cards: [0] } })).toBeNull()
     expect(
-      parseTable31Private({
-        table31: { tableKey: 'k', cards: [RULES.table31CardMax + 1] },
+      parseTable21Private({
+        table21: { tableKey: 'k', cards: [RULES.table21CardMax + 1] },
       }),
     ).toBeNull()
-    expect(parseTable31Private({ table31: { tableKey: 'k', cards: [1, 2] } })).toEqual({
+    expect(parseTable21Private({ table21: { tableKey: 'k', cards: [1, 2] } })).toEqual({
       tableKey: 'k',
       cards: [1, 2],
     })
   })
 })
 
-describe('mesa de 31: reparto visual', () => {
+describe('mesa de 21: reparto visual', () => {
   it('conserva exactamente las apuestas y los premios', () => {
-    const transfers = table31Transfers(
+    const transfers = table21Transfers(
       ['p1', 'p2', 'p3'],
       { p1: 50, p2: 30, p3: 20 },
       ['p2', 'p3'],

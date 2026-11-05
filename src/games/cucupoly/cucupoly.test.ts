@@ -9,7 +9,7 @@ import {
   reduce,
   rentFor,
   type CucupolyState,
-  type Table31State,
+  type Table21State,
 } from './engine'
 import {
   AUCTION_OPEN_IDLE_TICKS,
@@ -789,14 +789,14 @@ describe('rondas de espera de las habilidades', () => {
   })
 })
 
-/** Mesa de 31 en fase de cartas, con las apuestas ya cobradas. */
-function table31State(overrides: Partial<Table31State> = {}): CucupolyState {
+/** Mesa de 21 en fase de cartas, con las apuestas ya cobradas. */
+function table21State(overrides: Partial<Table21State> = {}): CucupolyState {
   const state = fresh()
-  state.phase = 'thirty-one'
+  state.phase = 'twenty-one'
   state.currentIndex = 0
   state.money.p1 = RULES.startingMoney - 50
   state.money.p2 = RULES.startingMoney - 50
-  state.table31 = {
+  state.table21 = {
     stage: 'draw',
     pendingBets: [],
     participants: ['p1', 'p2'],
@@ -812,17 +812,17 @@ function table31State(overrides: Partial<Table31State> = {}): CucupolyState {
   return state
 }
 
-describe('evento: mesa de 31', () => {
+describe('evento: mesa de 21', () => {
   it('una sorpresa abre la mesa para todos los activos', () => {
     const state = fresh()
     const seed = seedForChance(2, 0)
     aimAtChance(state, 'p1', seed)
 
     const after = reduce(state, { type: 'roll' }, 'p1') as CucupolyState
-    expect(after.phase).toBe('thirty-one')
-    expect(after.table31).not.toBeNull()
-    expect(after.table31!.stage).toBe('bets')
-    expect(after.table31!.pendingBets).toEqual(['p1', 'p2'])
+    expect(after.phase).toBe('twenty-one')
+    expect(after.table21).not.toBeNull()
+    expect(after.table21!.stage).toBe('bets')
+    expect(after.table21!.pendingBets).toEqual(['p1', 'p2'])
   })
 
   it('cobra las apuestas al sentarse y arma el pozo al cerrar las decisiones', () => {
@@ -833,19 +833,19 @@ describe('evento: mesa de 31', () => {
 
     after = reduce(after, { type: 'join-table', payload: { bet: 50 } }, 'p1') as CucupolyState
     expect(after.money.p1).toBe(RULES.startingMoney - 50)
-    expect(after.table31!.stage).toBe('bets')
-    expect(after.table31!.pot).toBe(0)
+    expect(after.table21!.stage).toBe('bets')
+    expect(after.table21!.pot).toBe(0)
 
     after = reduce(after, { type: 'pass-table' }, 'p2') as CucupolyState
-    expect(after.table31!.stage).toBe('draw')
-    expect(after.table31!.pot).toBe(50)
-    expect(after.table31!.cardCounts).toEqual({ p1: 0 })
+    expect(after.table21!.stage).toBe('draw')
+    expect(after.table21!.pot).toBe(50)
+    expect(after.table21!.cardCounts).toEqual({ p1: 0 })
   })
 
   it('no difunde cartas ni totales ajenos antes de la revelación', () => {
-    let after = reduce(table31State(), { type: 'draw-card' }, 'p1') as CucupolyState
+    let after = reduce(table21State(), { type: 'draw-card' }, 'p1') as CucupolyState
     // Pedir carta solo deja una solicitud pública: el valor aún no existe.
-    expect(after.table31!.pendingDraws).toEqual(['p1'])
+    expect(after.table21!.pendingDraws).toEqual(['p1'])
 
     after = reduce(
       after,
@@ -853,7 +853,7 @@ describe('evento: mesa de 31', () => {
       'p1',
     ) as CucupolyState
 
-    const table = after.table31!
+    const table = after.table21!
     expect(table.cardCounts).toEqual({ p1: 1, p2: 0 })
     expect(table.reveal).toBeNull()
     expect(table.settlement).toBeNull()
@@ -865,26 +865,26 @@ describe('evento: mesa de 31', () => {
 
   it('marca "Listo" igual al plantarse y al pasarse, sin delatar a nadie', () => {
     const stood = reduce(
-      table31State({ cardCounts: { p1: 2, p2: 1 } }),
+      table21State({ cardCounts: { p1: 2, p2: 1 } }),
       { type: 'stand' },
       'p1',
     ) as CucupolyState
     const busted = reduce(
-      table31State({ pendingDraws: ['p2'] }),
+      table21State({ pendingDraws: ['p2'] }),
       { type: 'deal-card', payload: { playerId: 'p2', card: 11, total: 32 } },
       'p1',
     ) as CucupolyState
 
-    expect(stood.table31!.ready).toEqual(['p1'])
-    expect(busted.table31!.ready).toEqual(['p2'])
+    expect(stood.table21!.ready).toEqual(['p1'])
+    expect(busted.table21!.ready).toEqual(['p2'])
     // El estado público solo conoce "ready": ni plantado ni pasado.
-    expect('busted' in stood.table31!).toBe(false)
-    expect('standing' in stood.table31!).toBe(false)
-    expect(JSON.stringify(busted.table31)).not.toContain('busted')
+    expect('busted' in stood.table21!).toBe(false)
+    expect('standing' in stood.table21!).toBe(false)
+    expect(JSON.stringify(busted.table21)).not.toContain('busted')
   })
 
   it('solo el anfitrión reparte cartas y el invitado solo puede pedirlas', () => {
-    const state = table31State()
+    const state = table21State()
     expect(
       isGameError(
         reduce(state, { type: 'deal-card', payload: { playerId: 'p1', card: 5, total: 5 } }, 'p2'),
@@ -892,7 +892,7 @@ describe('evento: mesa de 31', () => {
     ).toBe(true)
 
     const requested = reduce(state, { type: 'draw-card' }, 'p2') as CucupolyState
-    expect(requested.table31!.pendingDraws).toEqual(['p2'])
+    expect(requested.table21!.pendingDraws).toEqual(['p2'])
     expect(
       isGameError(
         reduce(
@@ -905,42 +905,61 @@ describe('evento: mesa de 31', () => {
   })
 
   it('al revelar voltea todas las manos y calcula los pagos con las reglas del pozo', () => {
-    const state = table31State({ ready: ['p1', 'p2'], cardCounts: { p1: 2, p2: 2 } })
+    const state = table21State({ ready: ['p1', 'p2'], cardCounts: { p1: 2, p2: 2 } })
     const revealed = reduce(
       state,
       {
         type: 'reveal-table',
-        payload: { hands: { p1: 20, p2: 22 }, cards: { p1: [10, 10], p2: [11, 11] } },
+        payload: { hands: { p1: 18, p2: 20 }, cards: { p1: [9, 9], p2: [10, 10] } },
       },
       'p1',
     ) as CucupolyState
 
-    expect(revealed.table31!.stage).toBe('reveal')
-    expect(revealed.table31!.reveal).toEqual({
-      hands: { p1: 20, p2: 22 },
-      cards: { p1: [10, 10], p2: [11, 11] },
+    expect(revealed.table21!.stage).toBe('reveal')
+    expect(revealed.table21!.reveal).toEqual({
+      hands: { p1: 18, p2: 20 },
+      cards: { p1: [9, 9], p2: [10, 10] },
       busted: [],
     })
-    expect(revealed.table31!.settlement).toMatchObject({
+    expect(revealed.table21!.settlement).toMatchObject({
       allBusted: false,
       winnerIds: ['p2'],
-      best: 22,
+      best: 20,
       pot: 100,
     })
-    expect(revealed.table31!.settlement!.payouts).toEqual([{ to: 'p2', amount: 100 }])
+    expect(revealed.table21!.settlement!.payouts).toEqual([{ to: 'p2', amount: 100 }])
     // El dinero no se mueve hasta que termina la animación.
     expect(revealed.money.p2).toBe(RULES.startingMoney - 50)
 
     const settled = reduce(revealed, { type: 'settle-table' }, 'p1') as CucupolyState
     expect(settled.money.p2).toBe(RULES.startingMoney + 50)
-    expect(settled.table31).toBeNull()
+    expect(settled.table21).toBeNull()
     const notice = settled.notices.find((entry) => entry.kind === 'money')
     expect(notice).toMatchObject({ to: 'p2', amount: 100 })
-    expect(notice?.text).toContain('pozo de la mesa de 31')
+    expect(notice?.text).toContain('pozo de la mesa de 21')
+  })
+
+  it('el objetivo es 21: 21 vale y 22 se pasa', () => {
+    const state = table21State({ ready: ['p1', 'p2'], cardCounts: { p1: 2, p2: 2 } })
+    const revealed = reduce(
+      state,
+      {
+        type: 'reveal-table',
+        payload: { hands: { p1: 21, p2: 22 }, cards: { p1: [10, 11], p2: [11, 11] } },
+      },
+      'p1',
+    ) as CucupolyState
+
+    expect(revealed.table21!.reveal!.busted).toEqual(['p2'])
+    expect(revealed.table21!.settlement).toMatchObject({
+      allBusted: false,
+      winnerIds: ['p1'],
+      best: 21,
+    })
   })
 
   it('reparte el pozo entre los empatados', () => {
-    const state = table31State({ ready: ['p1', 'p2'], cardCounts: { p1: 2, p2: 2 } })
+    const state = table21State({ ready: ['p1', 'p2'], cardCounts: { p1: 2, p2: 2 } })
     const revealed = reduce(
       state,
       {
@@ -949,7 +968,7 @@ describe('evento: mesa de 31', () => {
       },
       'p1',
     ) as CucupolyState
-    expect(revealed.table31!.settlement!.payouts).toEqual([
+    expect(revealed.table21!.settlement!.payouts).toEqual([
       { to: 'p1', amount: 50 },
       { to: 'p2', amount: 50 },
     ])
@@ -959,8 +978,8 @@ describe('evento: mesa de 31', () => {
     expect(settled.money.p2).toBe(RULES.startingMoney)
   })
 
-  it('devuelve las apuestas si todos se pasan de 31', () => {
-    const state = table31State({ ready: ['p1', 'p2'], cardCounts: { p1: 3, p2: 4 } })
+  it('devuelve las apuestas si todos se pasan de 21', () => {
+    const state = table21State({ ready: ['p1', 'p2'], cardCounts: { p1: 3, p2: 4 } })
     const revealed = reduce(
       state,
       {
@@ -969,12 +988,12 @@ describe('evento: mesa de 31', () => {
       },
       'p1',
     ) as CucupolyState
-    expect(revealed.table31!.settlement).toMatchObject({
+    expect(revealed.table21!.settlement).toMatchObject({
       allBusted: true,
       winnerIds: [],
       best: null,
     })
-    expect(revealed.table31!.settlement!.payouts).toEqual([
+    expect(revealed.table21!.settlement!.payouts).toEqual([
       { to: 'p1', amount: 50 },
       { to: 'p2', amount: 50 },
     ])
@@ -991,7 +1010,7 @@ describe('evento: mesa de 31', () => {
   })
 
   it('rechaza revelar sin todos listos o con cartas que no cuadran', () => {
-    const notReady = table31State({ ready: ['p1'], cardCounts: { p1: 1, p2: 1 } })
+    const notReady = table21State({ ready: ['p1'], cardCounts: { p1: 1, p2: 1 } })
     expect(
       isGameError(
         reduce(
@@ -1005,7 +1024,7 @@ describe('evento: mesa de 31', () => {
       ),
     ).toBe(true)
 
-    const ready = table31State({ ready: ['p1', 'p2'], cardCounts: { p1: 1, p2: 1 } })
+    const ready = table21State({ ready: ['p1', 'p2'], cardCounts: { p1: 1, p2: 1 } })
     expect(
       isGameError(
         reduce(
@@ -1021,7 +1040,7 @@ describe('evento: mesa de 31', () => {
   })
 
   it('solo el anfitrión puede revelar y liquidar', () => {
-    const state = table31State({ ready: ['p1', 'p2'], cardCounts: { p1: 1, p2: 1 } })
+    const state = table21State({ ready: ['p1', 'p2'], cardCounts: { p1: 1, p2: 1 } })
     expect(
       isGameError(
         reduce(

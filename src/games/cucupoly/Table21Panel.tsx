@@ -10,17 +10,17 @@ import { subscribeHostActions } from '../../net/hostActions'
 import type { CucupolyState } from './engine'
 import { RULES } from './rules.config'
 import {
-  drawTable31Card,
-  parseTable31Private,
-  table31Total,
-  type Table31Settlement,
-  type Table31Transfer,
-} from './table31'
+  drawTable21Card,
+  parseTable21Private,
+  table21Total,
+  type Table21Settlement,
+  type Table21Transfer,
+} from './table21'
 import {
   REVEAL_HOLD_MS,
-  TABLE31_COUNT_MS,
-  TABLE31_DEAL_MS,
-  TABLE31_PAYOUT_MS,
+  TABLE21_COUNT_MS,
+  TABLE21_DEAL_MS,
+  TABLE21_PAYOUT_MS,
 } from './timing'
 
 type Props = {
@@ -51,11 +51,11 @@ function nameOf(state: CucupolyState, id: string): string {
 }
 
 function sum(cards: readonly number[]): number {
-  return table31Total(cards)
+  return table21Total(cards)
 }
 
 /** Transferencias visibles: los autopagos salen del pozo para no volar a sí mismos. */
-function visibleTransfers(settlement: Table31Settlement): Table31Transfer[] {
+function visibleTransfers(settlement: Table21Settlement): Table21Transfer[] {
   return settlement.transfers
     .filter((transfer) => transfer.amount > 0)
     .map((transfer) =>
@@ -63,7 +63,7 @@ function visibleTransfers(settlement: Table31Settlement): Table31Transfer[] {
     )
 }
 
-export function Table31Panel({
+export function Table21Panel({
   state,
   me,
   players,
@@ -71,7 +71,7 @@ export function Table31Panel({
   privateData,
   sendPrivate,
 }: Props) {
-  const table = state.table31
+  const table = state.table21
   const isHost = state.order[0] === me.id
   const participantKey = table?.participants.join('|') ?? ''
   const tableKey = table
@@ -126,7 +126,7 @@ export function Table31Panel({
     const target = table.pendingDraws[0]
     if (!target) return
     if (table.ready.includes(target)) return
-    const card = drawTable31Card()
+    const card = drawTable21Card()
     const total = sum([...(handsRef.current[target] ?? []), card])
     dispatch({
       type: 'deal-card',
@@ -140,7 +140,7 @@ export function Table31Panel({
     for (const id of table.participants) {
       if (id === me.id) continue
       sendPrivate(id, {
-        table31: { tableKey, cards: [...(handsRef.current[id] ?? [])] },
+        table21: { tableKey, cards: [...(handsRef.current[id] ?? [])] },
       })
     }
   }, [
@@ -180,7 +180,7 @@ export function Table31Panel({
       if (isHost) {
         settleTimer.current = window.setTimeout(() => {
           dispatch({ type: 'settle-table' })
-        }, TABLE31_PAYOUT_MS)
+        }, TABLE21_PAYOUT_MS)
       }
     }, REVEAL_HOLD_MS)
     return () => {
@@ -199,7 +199,7 @@ export function Table31Panel({
     const start = performance.now()
     let frame = 0
     const tick = (now: number) => {
-      const progress = Math.min(1, (now - start) / TABLE31_COUNT_MS)
+      const progress = Math.min(1, (now - start) / TABLE21_COUNT_MS)
       setCountProgress(progress)
       if (progress < 1) frame = requestAnimationFrame(tick)
     }
@@ -241,7 +241,7 @@ export function Table31Panel({
 
   if (!table) return null
 
-  const parsedPrivate = parseTable31Private(privateData)
+  const parsedPrivate = parseTable21Private(privateData)
   const myCards =
     table.stage === 'reveal'
       ? []
@@ -254,7 +254,7 @@ export function Table31Panel({
   const myReady = table.ready.includes(me.id)
   const myPending = table.pendingDraws.includes(me.id)
   const myMoney = state.money[me.id] ?? 0
-  const maxBet = Math.min(RULES.table31BetLimit, myMoney)
+  const maxBet = Math.min(RULES.table21BetLimit, myMoney)
   const betValue = Number(bet)
   const betValid =
     bet !== '' && Number.isInteger(betValue) && betValue >= 1 && betValue <= maxBet
@@ -266,26 +266,26 @@ export function Table31Panel({
       : table.pot
 
   const paceStyle = {
-    '--cp31-deal': `${TABLE31_DEAL_MS}ms`,
-    '--cp31-count': `${TABLE31_COUNT_MS}ms`,
-    '--cp31-payout': `${TABLE31_PAYOUT_MS}ms`,
+    '--cp21-deal': `${TABLE21_DEAL_MS}ms`,
+    '--cp21-count': `${TABLE21_COUNT_MS}ms`,
+    '--cp21-payout': `${TABLE21_PAYOUT_MS}ms`,
   } as CSSProperties
 
   return (
-    <div className="cp-action-backdrop cp-table31-backdrop">
+    <div className="cp-action-backdrop cp-table21-backdrop">
       <section
-        className={`cp-action-card cp-table31 is-${table.stage}`}
+        className={`cp-action-card cp-table21 is-${table.stage}`}
         style={paceStyle}
         role="dialog"
         aria-modal="true"
-        aria-label="Mesa de 31"
+        aria-label="Mesa de 21"
       >
-        <header className="cp-action-head cp-table31-head">
+        <header className="cp-action-head cp-table21-head">
           <span className="cp-action-icon" aria-hidden="true">
             🃏
           </span>
           <div>
-            <span className="cp-eyebrow">Mesa de 31</span>
+            <span className="cp-eyebrow">Mesa de 21</span>
             <h2>
               {table.stage === 'bets'
                 ? 'Apuestas'
@@ -294,7 +294,7 @@ export function Table31Panel({
                   : 'Revelación'}
             </h2>
           </div>
-          <div className="cp-table31-pot" ref={potRef}>
+          <div className="cp-table21-pot" ref={potRef}>
             <span aria-hidden="true">🪙</span>
             <span>Pozo</span>
             <strong>{money(shownPot)}</strong>
@@ -303,18 +303,18 @@ export function Table31Panel({
 
         {table.stage === 'bets' ? (
           <>
-            <p className="cp-table31-lead">
-              Todos apuestan a la vez. Apuesta hasta {money(RULES.table31BetLimit)}.
+            <p className="cp-table21-lead">
+              Todos apuestan a la vez. Apuesta hasta {money(RULES.table21BetLimit)}.
             </p>
             {table.pendingBets.includes(me.id) ? (
-              <div className="cp-table31-bet">
+              <div className="cp-table21-bet">
                 <input
                   type="number"
                   min={1}
                   max={maxBet}
                   value={bet}
                   placeholder="Apuesta"
-                  aria-label="Apuesta de la mesa de 31"
+                  aria-label="Apuesta de la mesa de 21"
                   onChange={(event) => setBet(event.target.value)}
                 />
                 <div className="actions">
@@ -342,7 +342,7 @@ export function Table31Panel({
               <p className="muted small">Esperando decisiones…</p>
             )}
 
-            <ul className="cp-table31-bet-list">
+            <ul className="cp-table21-bet-list">
               {state.order
                 .filter((id) => !state.bankrupt.includes(id))
                 .map((id) => {
@@ -365,7 +365,7 @@ export function Table31Panel({
           </>
         ) : (
           <>
-            <div className="cp-table31-players">
+            <div className="cp-table21-players">
               {table.participants.map((id) => {
                 const player = players.find((candidate) => candidate.id === id)
                 const isMe = id === me.id
@@ -394,25 +394,25 @@ export function Table31Panel({
                       if (element) playerRefs.current.set(id, element)
                       else playerRefs.current.delete(id)
                     }}
-                    className={`cp-table31-player${isMe ? ' is-me' : ''}${
+                    className={`cp-table21-player${isMe ? ' is-me' : ''}${
                       busted ? ' is-busted' : ''
                     }${winner ? ' is-winner' : ''}`}
                   >
-                    <div className="cp-table31-player-head">
+                    <div className="cp-table21-player-head">
                       <span
                         className="avatar"
                         style={{ backgroundColor: player?.color ?? '#999' }}
                       >
                         {player?.emoji ?? '🙂'}
                       </span>
-                      <span className="cp-table31-name">
+                      <span className="cp-table21-name">
                         {nameOf(state, id)}
                         {isMe ? ' (tú)' : ''}
                       </span>
-                      {ready ? <span className="cp-table31-ready">Listo</span> : null}
+                      {ready ? <span className="cp-table21-ready">Listo</span> : null}
                     </div>
 
-                    <div className="cp-table31-cards">
+                    <div className="cp-table21-cards">
                       {isRevealed ? (
                         cards.length > 0 ? (
                           cards.map((card, index) => (
@@ -421,7 +421,7 @@ export function Table31Panel({
                             </span>
                           ))
                         ) : (
-                          <span className="cp-table31-empty">Sin cartas</span>
+                          <span className="cp-table21-empty">Sin cartas</span>
                         )
                       ) : isMe ? (
                         myCards.length > 0 ? (
@@ -431,7 +431,7 @@ export function Table31Panel({
                             </span>
                           ))
                         ) : (
-                          <span className="cp-table31-empty">Sin cartas</span>
+                          <span className="cp-table21-empty">Sin cartas</span>
                         )
                       ) : (
                         <>
@@ -439,27 +439,27 @@ export function Table31Panel({
                             <span key={index} className="cp-card-back" />
                           ))}
                           {count > 0 ? (
-                            <span className="cp-table31-count">
+                            <span className="cp-table21-count">
                               {count} {count === 1 ? 'carta' : 'cartas'}
                             </span>
                           ) : (
-                            <span className="cp-table31-empty">Sin cartas</span>
+                            <span className="cp-table21-empty">Sin cartas</span>
                           )}
                         </>
                       )}
                     </div>
 
                     {isRevealed ? (
-                      <div className="cp-table31-total">
+                      <div className="cp-table21-total">
                         <strong>{Math.round((total ?? 0) * countProgress)}</strong>
-                        {busted ? <span className="cp-table31-busted">Pasado</span> : null}
-                        {winner ? <span className="cp-table31-winner">Ganador</span> : null}
+                        {busted ? <span className="cp-table21-busted">Pasado</span> : null}
+                        {winner ? <span className="cp-table21-winner">Ganador</span> : null}
                       </div>
                     ) : isMe ? (
-                      <div className="cp-table31-total">
+                      <div className="cp-table21-total">
                         <strong>{myTotal}</strong>
-                        {myTotal > RULES.table31Target ? (
-                          <span className="cp-table31-busted">Te pasaste</span>
+                        {myTotal > RULES.table21Target ? (
+                          <span className="cp-table21-busted">Te pasaste</span>
                         ) : null}
                       </div>
                     ) : null}
@@ -469,7 +469,7 @@ export function Table31Panel({
             </div>
 
             {table.stage === 'draw' ? (
-              <div className="cp-table31-actions">
+              <div className="cp-table21-actions">
                 {myReady ? (
                   <p className="muted small">Listo. Esperando a los demás…</p>
                 ) : myPending ? (
@@ -496,7 +496,7 @@ export function Table31Panel({
             ) : null}
 
             {table.stage === 'reveal' && settlement ? (
-              <div className="cp-table31-result">
+              <div className="cp-table21-result">
                 {settlement.allBusted ? (
                   <p>Todos se pasaron: cada jugador recupera su apuesta.</p>
                 ) : (
@@ -508,7 +508,7 @@ export function Table31Panel({
                     con {settlement.best}. Pozo {money(settlement.pot)}.
                   </p>
                 )}
-                <ul className="cp-table31-payouts">
+                <ul className="cp-table21-payouts">
                   {settlement.payouts
                     .filter((payout) => payout.amount > 0)
                     .map((payout) => (
@@ -525,19 +525,19 @@ export function Table31Panel({
       </section>
 
       {coins.length > 0 ? (
-        <div className="cp-table31-coins" aria-hidden="true">
+        <div className="cp-table21-coins" aria-hidden="true">
           {coins.map((coin) => (
             <span
               key={coin.key}
-              className="cp-table31-coin"
+              className="cp-table21-coin"
               style={
                 {
                   left: coin.x,
                   top: coin.y,
-                  '--cp31-dx': `${coin.dx}px`,
-                  '--cp31-dy': `${coin.dy}px`,
+                  '--cp21-dx': `${coin.dx}px`,
+                  '--cp21-dy': `${coin.dy}px`,
                   animationDelay: `${coin.delay}ms`,
-                  animationDuration: `${TABLE31_PAYOUT_MS - 400}ms`,
+                  animationDuration: `${TABLE21_PAYOUT_MS - 400}ms`,
                 } as CSSProperties
               }
             >

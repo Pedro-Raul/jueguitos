@@ -18,7 +18,7 @@ export type GameViewProps<S> = {
   me: Player
   players: Player[]
   dispatch: (action: GameAction) => void
-  /** Datos privados enviados solo a este asiento (por ejemplo, una mano del 31). */
+  /** Datos privados enviados solo a este asiento (por ejemplo, una mano del 21). */
   privateData?: unknown
   /** Solo anfitrión: envía datos privados a un asiento concreto. */
   sendPrivate?: (targetId: string, data: unknown) => void

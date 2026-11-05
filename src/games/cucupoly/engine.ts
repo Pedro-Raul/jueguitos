@@ -33,10 +33,10 @@ import {
   rentRateFor,
 } from './buildings'
 import {
-  table31Total,
-  table31Transfers,
-  type Table31Settlement,
-} from './table31'
+  table21Total,
+  table21Transfers,
+  type Table21Settlement,
+} from './table21'
 
 export type Phase =
   | 'turn-order-roll'
@@ -45,7 +45,7 @@ export type Phase =
   | 'event'
   | 'buy-decision'
   | 'auction'
-  | 'thirty-one'
+  | 'twenty-one'
   | 'trade'
   | 'bus-move'
   | 'finished'
@@ -101,13 +101,13 @@ export type AuctionState = {
   countdown: number
 }
 
-export type Table31Reveal = {
+export type Table21Reveal = {
   hands: Record<string, number>
   cards: Record<string, number[]>
   busted: string[]
 }
 
-export type Table31State = {
+export type Table21State = {
   stage: 'bets' | 'draw' | 'reveal'
   pendingBets: string[]
   participants: string[]
@@ -120,9 +120,9 @@ export type Table31State = {
   pendingDraws: string[]
   pot: number
   /** Solo existe al revelar: manos completas y totales. */
-  reveal: Table31Reveal | null
+  reveal: Table21Reveal | null
   /** Solo existe al revelar: pagos calculados con las reglas existentes. */
-  settlement: Table31Settlement | null
+  settlement: Table21Settlement | null
 }
 
 export type TradeState = {
@@ -168,7 +168,7 @@ export type CucupolyState = {
   pendingBuy: number | null
   pendingBus: number | null
   auction: AuctionState | null
-  table31: Table31State | null
+  table21: Table21State | null
   trade: TradeState | null
   log: LogEntry[]
   /** Cola corta de avisos temporales (no es un historial). */
@@ -185,7 +185,7 @@ export type CucupolyState = {
   rollSeq: number
 }
 
-export const CHANCE_EVENTS = ['thirty-one', 'slow', 'fast'] as const
+export const CHANCE_EVENTS = ['twenty-one', 'slow', 'fast'] as const
 export type ChanceEvent = (typeof CHANCE_EVENTS)[number]
 
 /** PRNG mulberry32: mismo seed => misma secuencia, sin Math.random. */
@@ -324,35 +324,35 @@ function cloneState(source: CucupolyState): CucupolyState {
           registered: [...source.auction.registered],
         }
       : null,
-    table31: source.table31
+    table21: source.table21
       ? {
-          ...source.table31,
-          pendingBets: [...source.table31.pendingBets],
-          participants: [...source.table31.participants],
-          bets: { ...source.table31.bets },
-          cardCounts: { ...source.table31.cardCounts },
-          ready: [...source.table31.ready],
-          pendingDraws: [...source.table31.pendingDraws],
-          reveal: source.table31.reveal
+          ...source.table21,
+          pendingBets: [...source.table21.pendingBets],
+          participants: [...source.table21.participants],
+          bets: { ...source.table21.bets },
+          cardCounts: { ...source.table21.cardCounts },
+          ready: [...source.table21.ready],
+          pendingDraws: [...source.table21.pendingDraws],
+          reveal: source.table21.reveal
             ? {
-                hands: { ...source.table31.reveal.hands },
+                hands: { ...source.table21.reveal.hands },
                 cards: Object.fromEntries(
-                  Object.entries(source.table31.reveal.cards).map(([id, cards]) => [
+                  Object.entries(source.table21.reveal.cards).map(([id, cards]) => [
                     id,
                     [...cards],
                   ]),
                 ),
-                busted: [...source.table31.reveal.busted],
+                busted: [...source.table21.reveal.busted],
               }
             : null,
-          settlement: source.table31.settlement
+          settlement: source.table21.settlement
             ? {
-                ...source.table31.settlement,
-                winnerIds: [...source.table31.settlement.winnerIds],
-                payouts: source.table31.settlement.payouts.map((payout) => ({
+                ...source.table21.settlement,
+                winnerIds: [...source.table21.settlement.winnerIds],
+                payouts: source.table21.settlement.payouts.map((payout) => ({
                   ...payout,
                 })),
-                transfers: source.table31.settlement.transfers.map((transfer) => ({
+                transfers: source.table21.settlement.transfers.map((transfer) => ({
                   ...transfer,
                 })),
               }
@@ -380,7 +380,7 @@ function endTurn(state: CucupolyState): void {
     state.pendingBuy = null
     state.pendingBus = null
     state.trade = null
-    state.table31 = null
+    state.table21 = null
     state.auction = null
     pushLog(
       state,
@@ -394,7 +394,7 @@ function endTurn(state: CucupolyState): void {
   state.pendingBuy = null
   state.pendingBus = null
   state.trade = null
-  state.table31 = null
+  state.table21 = null
   state.auction = null
 
   const size = state.turnOrder.length
@@ -580,7 +580,7 @@ export function init(players: Player[], seed: number): CucupolyState {
     pendingBuy: null,
     pendingBus: null,
     auction: null,
-    table31: null,
+    table21: null,
     trade: null,
     log: [],
     notices: [],
@@ -965,7 +965,7 @@ function drawChance(state: CucupolyState): void {
     return
   }
 
-  state.table31 = {
+  state.table21 = {
     stage: 'bets',
     pendingBets: [...activeIds(state)],
     participants: [],
@@ -977,11 +977,11 @@ function drawChance(state: CucupolyState): void {
     reveal: null,
     settlement: null,
   }
-  state.phase = 'thirty-one'
-  pushLog(state, 'Sorpresa: se abre la mesa de 31.')
+  state.phase = 'twenty-one'
+  pushLog(state, 'Sorpresa: se abre la mesa de 21.')
   ruleNotice(
     state,
-    'Sorpresa: Mesa de 31 — se abre una ronda de apuestas para todos los jugadores activos.',
+    'Sorpresa: Mesa de 21 — se abre una ronda de apuestas para todos los jugadores activos.',
   )
 }
 
@@ -1605,14 +1605,14 @@ function handleJoinTable(
   playerId: string,
   payload: unknown,
 ): CucupolyState | { error: string } {
-  if (state.phase !== 'thirty-one' || !state.table31) return { error: 'No hay mesa de 31.' }
-  const table = state.table31
+  if (state.phase !== 'twenty-one' || !state.table21) return { error: 'No hay mesa de 21.' }
+  const table = state.table21
   if (table.stage !== 'bets') return { error: 'La mesa ya está jugando.' }
   if (!table.pendingBets.includes(playerId)) return { error: 'Ya decidiste.' }
 
   const bet = readInt(payload, 'bet')
-  if (bet === null || bet < 1 || bet > RULES.table31BetLimit) {
-    return { error: `La apuesta debe estar entre 1 y ${RULES.table31BetLimit}.` }
+  if (bet === null || bet < 1 || bet > RULES.table21BetLimit) {
+    return { error: `La apuesta debe estar entre 1 y ${RULES.table21BetLimit}.` }
   }
   if (bet > (state.money[playerId] ?? 0)) return { error: 'No tienes ese dinero.' }
 
@@ -1631,8 +1631,8 @@ function handlePassTable(
   state: CucupolyState,
   playerId: string,
 ): CucupolyState | { error: string } {
-  if (state.phase !== 'thirty-one' || !state.table31) return { error: 'No hay mesa de 31.' }
-  const table = state.table31
+  if (state.phase !== 'twenty-one' || !state.table21) return { error: 'No hay mesa de 21.' }
+  const table = state.table21
   if (table.stage !== 'bets') return { error: 'La mesa ya está jugando.' }
   if (!table.pendingBets.includes(playerId)) return { error: 'Ya decidiste.' }
 
@@ -1643,12 +1643,12 @@ function handlePassTable(
 }
 
 function startTableDraw(state: CucupolyState): void {
-  const table = state.table31
+  const table = state.table21
   if (!table) return
 
   if (table.participants.length === 0) {
-    pushLog(state, 'Nadie se sentó en la mesa de 31.')
-    state.table31 = null
+    pushLog(state, 'Nadie se sentó en la mesa de 21.')
+    state.table21 = null
     endTurn(state)
     return
   }
@@ -1658,15 +1658,15 @@ function startTableDraw(state: CucupolyState): void {
   table.pendingDraws = []
   table.pot = table.participants.reduce((sum, id) => sum + (table.bets[id] ?? 0), 0)
   table.stage = 'draw'
-  pushLog(state, `Mesa de 31: pozo de $${table.pot}.`)
+  pushLog(state, `Mesa de 21: pozo de $${table.pot}.`)
 }
 
 function handleDrawCard(
   state: CucupolyState,
   playerId: string,
 ): CucupolyState | { error: string } {
-  if (state.phase !== 'thirty-one' || !state.table31) return { error: 'No hay mesa de 31.' }
-  const table = state.table31
+  if (state.phase !== 'twenty-one' || !state.table21) return { error: 'No hay mesa de 21.' }
+  const table = state.table21
   if (table.stage !== 'draw') return { error: 'La mesa no está repartiendo.' }
   if (!table.participants.includes(playerId)) return { error: 'No estás en la mesa.' }
   if (table.ready.includes(playerId)) return state
@@ -1681,8 +1681,8 @@ function handleDealCard(
   playerId: string,
   payload: unknown,
 ): CucupolyState | { error: string } {
-  if (state.phase !== 'thirty-one' || !state.table31) return { error: 'No hay mesa de 31.' }
-  const table = state.table31
+  if (state.phase !== 'twenty-one' || !state.table21) return { error: 'No hay mesa de 21.' }
+  const table = state.table21
   if (table.stage !== 'draw') return { error: 'La mesa no está repartiendo.' }
   if (playerId !== state.order[0]) return { error: 'Solo el anfitrión reparte.' }
 
@@ -1692,14 +1692,14 @@ function handleDealCard(
 
   const card = readInt(payload, 'card')
   const total = readInt(payload, 'total')
-  if (card === null || card < 1 || card > RULES.table31CardMax) {
+  if (card === null || card < 1 || card > RULES.table21CardMax) {
     return { error: 'Carta inválida.' }
   }
   if (total === null || total < 0) return { error: 'Total inválido.' }
 
   table.cardCounts[target] = (table.cardCounts[target] ?? 0) + 1
   table.pendingDraws = table.pendingDraws.filter((id) => id !== target)
-  if (total > RULES.table31Target && !table.ready.includes(target)) {
+  if (total > RULES.table21Target && !table.ready.includes(target)) {
     // Públicamente solo se marca "Listo"; no se revela que se pasó.
     table.ready.push(target)
   }
@@ -1711,8 +1711,8 @@ function handleStand(
   state: CucupolyState,
   playerId: string,
 ): CucupolyState | { error: string } {
-  if (state.phase !== 'thirty-one' || !state.table31) return { error: 'No hay mesa de 31.' }
-  const table = state.table31
+  if (state.phase !== 'twenty-one' || !state.table21) return { error: 'No hay mesa de 21.' }
+  const table = state.table21
   if (table.stage !== 'draw') return { error: 'La mesa no está repartiendo.' }
   if (!table.participants.includes(playerId)) return { error: 'No estás en la mesa.' }
   if (table.ready.includes(playerId)) return state
@@ -1757,7 +1757,7 @@ function readCards(
     const hand: number[] = []
     for (const card of value) {
       if (typeof card !== 'number' || !Number.isInteger(card)) return null
-      if (card < 1 || card > RULES.table31CardMax) return null
+      if (card < 1 || card > RULES.table21CardMax) return null
       hand.push(card)
     }
     cards[id] = hand
@@ -1766,10 +1766,10 @@ function readCards(
 }
 
 function buildTableSettlement(
-  table: Table31State,
+  table: Table21State,
   hands: Record<string, number>,
   busted: readonly string[],
-): Table31Settlement {
+): Table21Settlement {
   const eligible = table.participants.filter((id) => !busted.includes(id))
 
   if (eligible.length === 0) {
@@ -1812,7 +1812,7 @@ function buildTableSettlement(
     best,
     pot: table.pot,
     payouts,
-    transfers: table31Transfers(table.participants, table.bets, winnerIds, won),
+    transfers: table21Transfers(table.participants, table.bets, winnerIds, won),
   }
 }
 
@@ -1821,8 +1821,8 @@ function handleRevealTable(
   playerId: string,
   payload: unknown,
 ): CucupolyState | { error: string } {
-  if (state.phase !== 'thirty-one' || !state.table31) return { error: 'No hay mesa de 31.' }
-  const table = state.table31
+  if (state.phase !== 'twenty-one' || !state.table21) return { error: 'No hay mesa de 21.' }
+  const table = state.table21
   if (table.stage !== 'draw') return { error: 'La mesa no está repartiendo.' }
   if (playerId !== state.order[0]) return { error: 'Solo el anfitrión revela.' }
   if (!table.participants.every((id) => table.ready.includes(id))) {
@@ -1834,16 +1834,16 @@ function handleRevealTable(
   if (!hands || !cards) return { error: 'Manos inválidas.' }
 
   for (const id of table.participants) {
-    if (table31Total(cards[id] ?? []) !== hands[id]) {
+    if (table21Total(cards[id] ?? []) !== hands[id]) {
       return { error: 'Las cartas no cuadran con el total.' }
     }
   }
 
-  const busted = table.participants.filter((id) => (hands[id] ?? 0) > RULES.table31Target)
+  const busted = table.participants.filter((id) => (hands[id] ?? 0) > RULES.table21Target)
   table.reveal = { hands, cards, busted }
   table.settlement = buildTableSettlement(table, hands, busted)
   table.stage = 'reveal'
-  pushLog(state, 'Mesa de 31: se revelan las cartas.')
+  pushLog(state, 'Mesa de 21: se revelan las cartas.')
   return state
 }
 
@@ -1851,8 +1851,8 @@ function handleSettleTable(
   state: CucupolyState,
   playerId: string,
 ): CucupolyState | { error: string } {
-  if (state.phase !== 'thirty-one' || !state.table31) return { error: 'No hay mesa de 31.' }
-  const table = state.table31
+  if (state.phase !== 'twenty-one' || !state.table21) return { error: 'No hay mesa de 21.' }
+  const table = state.table21
   if (table.stage !== 'reveal' || !table.reveal || !table.settlement) {
     return { error: 'La mesa todavía no se ha revelado.' }
   }
@@ -1863,13 +1863,13 @@ function handleSettleTable(
     if (payout.amount <= 0) continue
     state.money[payout.to] = (state.money[payout.to] ?? 0) + payout.amount
     if (!settlement.allBusted) {
-      moneyNotice(state, null, payout.to, payout.amount, 'pozo de la mesa de 31')
+      moneyNotice(state, null, payout.to, payout.amount, 'pozo de la mesa de 21')
     }
   }
 
   if (settlement.allBusted) {
-    pushLog(state, 'Todos se pasaron de 31: se devuelven las apuestas.')
-    eventNotice(state, 'Mesa de 31: todos se pasaron; cada jugador recupera su apuesta.')
+    pushLog(state, 'Todos se pasaron de 21: se devuelven las apuestas.')
+    eventNotice(state, 'Mesa de 21: todos se pasaron; cada jugador recupera su apuesta.')
   } else {
     const best = settlement.best ?? 0
     pushLog(
@@ -1878,7 +1878,7 @@ function handleSettleTable(
     )
   }
 
-  state.table31 = null
+  state.table21 = null
   endTurn(state)
   return state
 }
