@@ -39,9 +39,15 @@ export function groupTilesFor(tileId: number): number[] {
   return BOARD.filter((tile) => TILE_COLORS[tile.index] === color).map((tile) => tile.index)
 }
 
-export function buildCostFor(tileId: number): number | null {
+/**
+ * Costo de una casa/hotel. El multiplicador lo decide la fase final para que
+ * el HUD y el cobro usen exactamente el mismo importe.
+ */
+export function buildCostFor(tileId: number, multiplier = 1): number | null {
   const color = buildableColor(tileId)
-  return color ? BUILDING_COSTS[color] ?? null : null
+  if (!color) return null
+  const base = BUILDING_COSTS[color]
+  return base === undefined ? null : Math.round(base * multiplier)
 }
 
 export function buildingLevelFor(state: BuildState, tileId: number): number {
@@ -55,7 +61,11 @@ export function rentRateFor(level: number): number {
 }
 
 /** Grupos de color completos del jugador, con su costo y nivel por casilla. */
-export function completeGroupsFor(state: BuildState, playerId: string): BuildGroup[] {
+export function completeGroupsFor(
+  state: BuildState,
+  playerId: string,
+  multiplier = 1,
+): BuildGroup[] {
   const seen = new Set<string>()
   const groups: BuildGroup[] = []
 
@@ -67,10 +77,11 @@ export function completeGroupsFor(state: BuildState, playerId: string): BuildGro
     if (!tiles.every((id) => state.owners[id] === playerId)) continue
 
     seen.add(color)
+    const base = BUILDING_COSTS[color] ?? 0
     groups.push({
       color,
       name: groupNameFor(tile),
-      cost: BUILDING_COSTS[color] ?? 0,
+      cost: Math.round(base * multiplier),
       tiles,
     })
   }

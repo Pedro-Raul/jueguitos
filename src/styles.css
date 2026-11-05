@@ -1075,6 +1075,24 @@ button {
   color: #1c5c31;
 }
 
+.cp-badge-final {
+  background: #f6d9d9;
+  border-color: #d99a9a;
+  color: #6b1d1d;
+}
+
+.cp-badge-final-caos {
+  background: #e5dcf6;
+  border-color: #b4a0dd;
+  color: #3f2a6b;
+}
+
+.cp-badge-final-impuestos_altos {
+  background: #f8e6c9;
+  border-color: #dcb877;
+  color: #6b4a12;
+}
+
 .cp-dock {
   width: max-content;
   max-width: 100%;

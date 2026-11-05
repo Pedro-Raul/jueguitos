@@ -18,15 +18,23 @@ import {
 import {
   EVENTS,
   AUCTION_OPEN_IDLE_TICKS,
+  FINAL_EVENTS,
   MIN_RAISE,
   discountRoundsLeft,
   drawableEvents,
+  drawableFinalEvents,
+  finalEventRoundsLeft,
+  finalPriceMultiplier,
   freeAuctionTiles,
   hasSeenEvent,
+  hasSeenFinalEvent,
   isAuctionEvent,
   isDiscountActive,
+  isFinalEventActive,
   markEventSeen,
+  markFinalEventSeen,
   purchasePriceFor,
+  type FinalEventId,
   type InitialEventId,
 } from './events'
 import { planAnimations, snapshotSeen, type RollPlan, type SeenRoll } from './planAnimations'
@@ -84,6 +92,8 @@ function phaseHint(state: CucupolyState): string {
       return `${nameOf(state, state.turnOrder[state.currentIndex])} debe tirar.`
     case 'event':
       return 'Sorteando el evento inicial…'
+    case 'final-event':
+      return 'Sorteando el evento final…'
     case 'buy-decision':
       return state.pendingBuy === null
         ? 'Decisión de compra.'
@@ -113,7 +123,8 @@ function phaseHint(state: CucupolyState): string {
 
 /** ¿Hay una decisión pendiente que solo puede resolver `meId`? */
 function mustAct(state: CucupolyState, meId: string): boolean {
-  if (state.phase === 'finished') return false
+  // Eliminados y partida terminada: solo espectadores, sin controles.
+  if (state.phase === 'finished' || state.bankrupt.includes(meId)) return false
   const isMyTurn = state.turnOrder[state.currentIndex] === meId
   switch (state.phase) {
     case 'turn-order-roll':
@@ -122,6 +133,9 @@ function mustAct(state: CucupolyState, meId: string): boolean {
       return false
     case 'event':
       // El anfitrión sortea solo; nadie tiene una acción pendiente.
+      return false
+    case 'final-event':
+      // Igual que el evento inicial: el anfitrión sortea y aplica.
       return false
     case 'auction':
       if (!state.auction) return false
@@ -416,7 +430,12 @@ function ActionPanel({ state, me, dispatch }: PanelProps) {
 
   if (state.phase === 'buy-decision' && state.pendingBuy !== null) {
     const tile = BOARD[state.pendingBuy]
-    const price = purchasePriceFor(tile.price ?? 0, state.initialEvent, state.roundNumber)
+    const price = purchasePriceFor(
+      tile.price ?? 0,
+      state.initialEvent,
+      state.roundNumber,
+      state.finalEvent,
+    )
     if (!isMyTurn) {
       return <p className="muted">Esperando a {nameOf(state, current)}…</p>
     }
@@ -629,7 +648,8 @@ function ActionPanel({ state, me, dispatch }: PanelProps) {
 /** Panel de construcción: solo grupos completos del jugador, con costo y nivel. */
 function BuildPanel({ state, me, dispatch, myMoney }: PanelProps & { myMoney: number }) {
   const [selected, setSelected] = useState<number | ''>('')
-  const groups = completeGroupsFor(state, me.id)
+  const multiplier = finalPriceMultiplier(state.finalEvent, state.roundNumber)
+  const groups = completeGroupsFor(state, me.id, multiplier)
 
   if (groups.length === 0) {
     return (
@@ -645,7 +665,7 @@ function BuildPanel({ state, me, dispatch, myMoney }: PanelProps & { myMoney: nu
   const tileId = selected === '' ? null : Number(selected)
   const tile = tileId === null ? null : BOARD[tileId]
   const level = tileId === null ? 0 : buildingLevelFor(state, tileId)
-  const cost = tileId === null ? null : buildCostFor(tileId)
+  const cost = tileId === null ? null : buildCostFor(tileId, multiplier)
   const isHotel = level >= MAX_HOUSES
   const error =
     tileId === null ? null : buildRuleError(state, tileId, me.id, isHotel ? 'hotel' : 'house')
@@ -736,7 +756,12 @@ function TileSheet({
     tile.price === undefined
       ? null
       : ownerId === null
-        ? purchasePriceFor(tile.price, state.initialEvent, state.roundNumber)
+        ? purchasePriceFor(
+            tile.price,
+            state.initialEvent,
+            state.roundNumber,
+            state.finalEvent,
+          )
         : tile.price
   const discounted = purchasePrice !== null && purchasePrice !== tile.price
 
@@ -828,10 +853,14 @@ export function CucupolyView({
   const [banner, setBanner] = useState<string | null>(null)
   const [eventBanner, setEventBanner] = useState<InitialEventId | null>(null)
   const [eventLeaving, setEventLeaving] = useState(false)
+  const [finalBanner, setFinalBanner] = useState<FinalEventId | null>(null)
+  const [finalLeaving, setFinalLeaving] = useState(false)
   const [turnPause, setTurnPause] = useState(false)
   const seenRoll = useRef<SeenRoll | null>(null)
   const seenEventSeq = useRef(0)
-  const turnKey = `${state.turnNumber}:${state.currentIndex}`
+  const seenFinalEventSeq = useRef(0)
+  // El id (no el índice) evita pausas falsas cuando un eliminado sale del orden.
+  const turnKey = `${state.turnNumber}:${state.turnOrder[state.currentIndex] ?? ''}`
   const lastTurnKey = useRef(turnKey)
 
   const current =
@@ -965,6 +994,41 @@ export function CucupolyView({
     dispatch({ type: 'start-initial-event', payload: { eventId, tileId } })
   }, [isHost, state.phase, state.initialEvent, state.owners, state.roundNumber, dispatch])
 
+  // Evento final: desde la ronda 12, el anfitrión sortea fuera del reducer.
+  // Nunca repite el anterior y, en Caos, genera la permutación de asientos.
+  const drawnFinalRound = useRef(0)
+  useEffect(() => {
+    if (!isHost || state.phase !== 'final-event') return
+    if (drawnFinalRound.current === state.roundNumber) return
+    drawnFinalRound.current = state.roundNumber
+
+    const pool = drawableFinalEvents(state.finalEvent?.id ?? null)
+    const eventId = pool[Math.floor(Math.random() * pool.length)]
+    const payload: Record<string, unknown> = { eventId }
+
+    if (eventId === 'caos') {
+      const active = state.order.filter((id) => !state.bankrupt.includes(id))
+      const order = [...active]
+      for (let i = order.length - 1; i > 0; i -= 1) {
+        const j = Math.floor(Math.random() * (i + 1))
+        const swap = order[i]
+        order[i] = order[j]
+        order[j] = swap
+      }
+      payload.order = order
+    }
+
+    dispatch({ type: 'start-final-event', payload })
+  }, [
+    isHost,
+    state.phase,
+    state.roundNumber,
+    state.finalEvent,
+    state.order,
+    state.bankrupt,
+    dispatch,
+  ])
+
   // La subasta abre cuando termina el anuncio. Si este cliente ya había visto
   // el anuncio (recarga o reconexión), abre de inmediato.
   const auctionEventSeq =
@@ -1032,10 +1096,37 @@ export function CucupolyView({
     }
   }, [state.eventSeq, state.initialEvent, state.seed])
 
-  // Los avisos no compiten con los anuncios grandes (evento inicial, orden de
-  // turnos o victoria): la cola se congela hasta que el overlay desaparece.
+  // Anuncio del evento final: una sola vez por cliente, con clave propia para
+  // no confundirlo con el evento inicial.
+  useEffect(() => {
+    const seq = state.finalEventSeq
+    const event = state.finalEvent
+    if (!event || seq <= 0) return
+    if (seenFinalEventSeq.current >= seq) return
+    seenFinalEventSeq.current = seq
+    if (hasSeenFinalEvent(state.seed, seq)) return
+
+    markFinalEventSeen(state.seed, seq)
+    setFinalBanner(event.id)
+    setFinalLeaving(false)
+    const leave = window.setTimeout(() => setFinalLeaving(true), EVENT_BANNER_MS)
+    const clear = window.setTimeout(() => {
+      setFinalBanner(null)
+      setFinalLeaving(false)
+    }, EVENT_BANNER_MS + EVENT_BANNER_EXIT_MS)
+    return () => {
+      window.clearTimeout(leave)
+      window.clearTimeout(clear)
+    }
+  }, [state.finalEventSeq, state.finalEvent, state.seed])
+
+  // Los avisos no compiten con los anuncios grandes (evento inicial u orden de
+  // turnos). Tras la victoria se dejan correr para que el último «quedó en
+  // bancarrota» también llegue a todos.
   const noticesPaused =
-    eventBanner !== null || state.phase === 'turn-order-reveal' || state.phase === 'finished'
+    eventBanner !== null ||
+    finalBanner !== null ||
+    state.phase === 'turn-order-reveal'
   const noticeQueue = useNoticeQueue(state.notices, state.noticeSeq, noticesPaused)
 
   const roll = play
@@ -1053,6 +1144,10 @@ export function CucupolyView({
       : phaseHint(state)
   const locked = animating || turnPause
   const acting = mustAct(state, me.id)
+  const activeFinalEvent =
+    state.finalEvent && isFinalEventActive(state.finalEvent, state.roundNumber)
+      ? state.finalEvent
+      : null
 
   return (
     <div
@@ -1092,6 +1187,23 @@ export function CucupolyView({
             <span className="cp-eyebrow">Evento inicial</span>
             <h2>{EVENTS[eventBanner].name}</h2>
             <p>{EVENTS[eventBanner].description}</p>
+          </div>
+        </div>
+      ) : null}
+
+      {finalBanner ? (
+        <div
+          className={`cp-event-overlay${finalLeaving ? ' is-leaving' : ''}`}
+          role="status"
+          aria-live="assertive"
+        >
+          <div className="cp-event-card">
+            <span className="cp-event-icon" aria-hidden="true">
+              {FINAL_EVENTS[finalBanner].icon}
+            </span>
+            <span className="cp-eyebrow">Evento final</span>
+            <h2>{FINAL_EVENTS[finalBanner].name}</h2>
+            <p>{FINAL_EVENTS[finalBanner].description}</p>
           </div>
         </div>
       ) : null}
@@ -1182,6 +1294,15 @@ export function CucupolyView({
             <span className="cp-badge cp-badge-discount">
               🏷️ Semana de descuentos: quedan {discountRoundsLeft(state.roundNumber)}{' '}
               {discountRoundsLeft(state.roundNumber) === 1 ? 'ronda' : 'rondas'}
+            </span>
+          ) : null}
+          {activeFinalEvent ? (
+            <span className={`cp-badge cp-badge-final cp-badge-final-${activeFinalEvent.id}`}>
+              {FINAL_EVENTS[activeFinalEvent.id].icon} {FINAL_EVENTS[activeFinalEvent.id].name}:
+              quedan {finalEventRoundsLeft(activeFinalEvent, state.roundNumber)}{' '}
+              {finalEventRoundsLeft(activeFinalEvent, state.roundNumber) === 1
+                ? 'ronda'
+                : 'rondas'}
             </span>
           ) : null}
         </div>

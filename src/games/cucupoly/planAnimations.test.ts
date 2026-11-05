@@ -16,6 +16,8 @@ function makeState(overrides: Overrides = {}): CucupolyState {
     roundNumber: 1,
     initialEvent: null,
     eventSeq: 0,
+    finalEvent: null,
+    finalEventSeq: 0,
     phase: 'waiting-roll',
     owners: {},
     buildings: {},

@@ -10,13 +10,21 @@ import {
 import { RULES } from './rules.config'
 import {
   AUCTION_OPEN_IDLE_TICKS,
+  FINAL_EVENTS,
   INITIAL_EVENT_ROUND,
   MIN_RAISE,
   auctionModeFor,
+  finalPriceMultiplier,
+  finalTaxFor,
   freeAuctionTiles,
+  isFinalEventActive,
+  isFinalEventId,
+  isFinalEventRound,
   isInitialEventId,
   purchasePriceFor,
   type AuctionMode,
+  type FinalEventId,
+  type FinalEventState,
   type InitialEventId,
 } from './events'
 import {
@@ -43,6 +51,7 @@ export type Phase =
   | 'turn-order-reveal'
   | 'waiting-roll'
   | 'event'
+  | 'final-event'
   | 'buy-decision'
   | 'auction'
   | 'twenty-one'
@@ -153,6 +162,10 @@ export type CucupolyState = {
   initialEvent: InitialEventId | null
   /** Sube en 1 al anunciar un evento; los clientes lo usan para animar una vez. */
   eventSeq: number
+  /** Evento final vigente desde la ronda 12; null antes de la fase final. */
+  finalEvent: FinalEventState | null
+  /** Sube en 1 al anunciar un evento final. */
+  finalEventSeq: number
   phase: Phase
   owners: Record<number, string | null>
   /** Nivel de construcción por casilla: 0..4 casas, 5 = hotel. */
@@ -236,6 +249,11 @@ function currentId(state: CucupolyState): string {
   return state.turnOrder[state.currentIndex]
 }
 
+/** La partida termina por eliminación: queda un solo jugador activo. */
+function isGameOver(state: CucupolyState): boolean {
+  return state.phase === 'finished' || activeIds(state).length <= 1
+}
+
 function ownsType(state: CucupolyState, playerId: string, type: 'bus' | 'service'): number {
   return BOARD.filter((tile) => tile.type === type && state.owners[tile.index] === playerId).length
 }
@@ -285,7 +303,9 @@ export function rentFor(state: CucupolyState, tileId: number, diceTotal: number)
   if (isWaterActive(state, owner)) {
     rent = Math.round(rent * (1 + RULES.waterRentBonus))
   }
-  return rent
+  // Misma fuente que compras y construcción: la inflación final se aplica
+  // encima de cualquier bono para que HUD y cobro coincidan.
+  return Math.round(rent * finalPriceMultiplier(state.finalEvent, state.roundNumber))
 }
 
 function cloneState(source: CucupolyState): CucupolyState {
@@ -307,6 +327,7 @@ function cloneState(source: CucupolyState): CucupolyState {
           request: source.turnOrderState.request,
         }
       : null,
+    finalEvent: source.finalEvent ? { ...source.finalEvent } : null,
     owners: { ...source.owners },
     buildings: { ...source.buildings },
     positions: { ...source.positions },
@@ -371,21 +392,44 @@ function cloneState(source: CucupolyState): CucupolyState {
   }
 }
 
+/** Deja `turnOrder` solo con jugadores activos, conservando el orden relativo. */
+function compactTurnOrder(state: CucupolyState): void {
+  const current = state.turnOrder[state.currentIndex]
+  state.turnOrder = state.turnOrder.filter((id) => !state.bankrupt.includes(id))
+  if (state.turnOrder.length === 0) {
+    state.currentIndex = 0
+    return
+  }
+  const index = state.turnOrder.indexOf(current)
+  state.currentIndex = index >= 0 ? index : 0
+}
+
+/** Cierra la partida cuando ya solo queda un jugador activo. */
+function finishGame(state: CucupolyState, remaining: readonly string[]): void {
+  state.phase = 'finished'
+  state.winner = remaining[0] ?? null
+  state.dice = null
+  state.diceModifier = null
+  state.turnOrderState = null
+  state.pendingBuy = null
+  state.pendingBus = null
+  state.trade = null
+  state.table21 = null
+  state.auction = null
+  compactTurnOrder(state)
+  pushLog(
+    state,
+    remaining[0] ? `Gana ${state.names[remaining[0]]}.` : 'Fin de la partida.',
+  )
+}
+
 function endTurn(state: CucupolyState): void {
+  // La bancarrota puede haber cerrado la partida antes de llegar aquí.
+  if (state.phase === 'finished') return
+
   const remaining = activeIds(state)
   if (remaining.length <= 1) {
-    state.phase = 'finished'
-    state.winner = remaining[0] ?? null
-    state.dice = null
-    state.pendingBuy = null
-    state.pendingBus = null
-    state.trade = null
-    state.table21 = null
-    state.auction = null
-    pushLog(
-      state,
-      remaining[0] ? `Gana ${state.names[remaining[0]]}.` : 'Fin de la partida.',
-    )
+    finishGame(state, remaining)
     return
   }
 
@@ -399,16 +443,45 @@ function endTurn(state: CucupolyState): void {
 
   const size = state.turnOrder.length
   const previousIndex = state.currentIndex
+  let nextIndex = previousIndex
   for (let step = 1; step <= size; step += 1) {
-    const index = (state.currentIndex + step) % size
+    const index = (previousIndex + step) % size
     if (!state.bankrupt.includes(state.turnOrder[index])) {
-      state.currentIndex = index
+      nextIndex = index
       break
     }
   }
+  state.currentIndex = nextIndex
   // La ronda cambia cuando el turno vuelve a empezar (o salta por encima del
   // inicio porque los primeros asientos están eliminados).
-  if (state.currentIndex <= previousIndex) state.roundNumber += 1
+  const roundChanged = nextIndex <= previousIndex
+  if (roundChanged) state.roundNumber += 1
+  // Los eliminados dejan de ocupar sitio en el orden; los activos conservan su
+  // orden relativo y el índice se recalcula sobre el array compacto.
+  compactTurnOrder(state)
+
+  // Impuestos altos: al empezar cada ronda del evento, antes de cualquier
+  // turno. La ronda 12 los cobra al aplicar el evento (ver el handler).
+  if (
+    roundChanged &&
+    state.finalEvent !== null &&
+    isFinalEventActive(state.finalEvent, state.roundNumber) &&
+    FINAL_EVENTS[state.finalEvent.id].kind === 'taxes'
+  ) {
+    applyFinalTaxes(state)
+    if (isGameOver(state)) return
+  }
+
+  // Desde la ronda 12, cada 3 rondas el anfitrión sortea fuera del reducer y
+  // aplica el evento final; hasta entonces nadie puede tirar.
+  if (
+    isFinalEventRound(state.roundNumber) &&
+    state.finalEvent?.startRound !== state.roundNumber
+  ) {
+    state.phase = 'final-event'
+    return
+  }
+
   // Al empezar la ronda 2 se abre la fase de evento. El anfitrión sortea el
   // evento fuera del reducer y lo aplica con `start-initial-event`.
   state.phase =
@@ -416,6 +489,24 @@ function endTurn(state: CucupolyState): void {
       ? 'event'
       : 'waiting-roll'
   if (state.phase === 'waiting-roll') announceDiceModifier(state)
+}
+
+/** Cobra el 15% del efectivo de cada activo al banco. Deudas reales. */
+function applyFinalTaxes(state: CucupolyState): void {
+  for (const id of activeIds(state)) {
+    if (isGameOver(state)) return
+    const tax = finalTaxFor(state.money[id] ?? 0)
+    if (tax <= 0) continue
+    pushLog(
+      state,
+      `Impuestos altos: ${state.names[id]} paga $${tax} al banco (15% de su efectivo).`,
+    )
+    eventNotice(
+      state,
+      `Impuestos altos: ${state.names[id]} paga $${tax} al banco (15% de su efectivo).`,
+    )
+    pay(state, id, null, tax, 'impuestos altos')
+  }
 }
 
 /** Recuerda a todos por qué este turno se tira con 1 o 3 dados. */
@@ -441,36 +532,72 @@ function eliminate(state: CucupolyState, playerId: string, creditor: string | nu
 
   const owned = BOARD.filter((tile) => state.owners[tile.index] === playerId).map((tile) => tile.index)
   for (const tileId of owned) {
-    state.owners[tileId] = creditor
+    if (creditor) {
+      // El acreedor hereda la propiedad con su nivel de construcción.
+      state.owners[tileId] = creditor
+    } else {
+      // Al banco: queda libre y sin edificios.
+      state.owners[tileId] = null
+      state.buildings[tileId] = 0
+    }
     if (state.abilities[tileId]) {
       state.abilities[tileId] = { from: 0, until: 0, readyAt: 0 }
     }
   }
+
   state.money[playerId] = 0
-  pushLog(state, `${state.names[playerId]} queda eliminado.`)
+  state.inJail[playerId] = false
+  state.jailTurns[playerId] = 0
+
+  // Si el eliminado era el jugador activo, el índice lo resolverá `endTurn`;
+  // si no, puede salir ya del orden sin alterar el turno en curso.
+  const orderIndex = state.turnOrder.indexOf(playerId)
+  if (orderIndex !== -1 && orderIndex !== state.currentIndex) {
+    state.turnOrder.splice(orderIndex, 1)
+    if (orderIndex < state.currentIndex) state.currentIndex -= 1
+  }
+
+  pushLog(state, `${state.names[playerId]} quedó en bancarrota.`)
   eventNotice(
     state,
-    `${state.names[playerId]} queda eliminado${creditor ? `; sus propiedades pasan a ${state.names[creditor]}` : ''}.`,
+    creditor
+      ? `${state.names[playerId]} quedó en bancarrota; ${state.names[creditor]} recibe sus propiedades.`
+      : `${state.names[playerId]} quedó en bancarrota; sus propiedades quedan sin dueño y sin edificios.`,
   )
+
+  const remaining = activeIds(state)
+  if (remaining.length <= 1) finishGame(state, remaining)
 }
 
-/** Devuelve false si el jugador no puede pagar y queda en bancarrota. */
-function pay(
+/**
+ * Único punto de cobro: todo el dinero que sale de un jugador pasa por aquí.
+ * - `debt`: deuda obligatoria (alquiler, impuesto, carta, evento). Si no
+ *   alcanza, el jugador queda en bancarrota.
+ * - `spend`: pago voluntario ya validado (compra, edificación, subasta, fianza,
+ *   apuesta). Si no alcanza, no se cobra nada y devuelve false.
+ */
+function charge(
   state: CucupolyState,
   from: string,
   to: string | null,
   amount: number,
   reason: string,
+  mode: 'debt' | 'spend',
+  detail?: string,
 ): boolean {
-  const available = state.money[from] ?? 0
-  const paid = Math.min(available, amount)
+  if (amount <= 0) return true
 
+  const available = state.money[from] ?? 0
   if (available >= amount) {
     state.money[from] = available - amount
-    if (to) state.money[to] = (state.money[to] ?? 0) + amount
-    if (to && amount > 0) moneyNotice(state, from, to, amount, reason)
+    if (to) {
+      state.money[to] = (state.money[to] ?? 0) + amount
+      if (mode === 'debt') moneyNotice(state, from, to, amount, reason, detail)
+    }
     return true
   }
+
+  if (mode === 'spend') return false
 
   state.money[from] = 0
   if (to) state.money[to] = (state.money[to] ?? 0) + available
@@ -478,11 +605,34 @@ function pay(
     state,
     `${state.names[from]} no puede pagar $${amount} (tiene $${available}).`,
   )
-  if (to && paid > 0) {
-    moneyNotice(state, from, to, paid, reason, 'No pudo pagar el total y quedó eliminado.')
+  if (to && available > 0) {
+    moneyNotice(state, from, to, available, reason, 'No pudo pagar el total y quedó en bancarrota.')
   }
   eliminate(state, from, to)
   return false
+}
+
+/** Deuda obligatoria: si no puede cubrirla, queda en bancarrota. */
+function pay(
+  state: CucupolyState,
+  from: string,
+  to: string | null,
+  amount: number,
+  reason: string,
+  detail?: string,
+): boolean {
+  return charge(state, from, to, amount, reason, 'debt', detail)
+}
+
+/** Pago voluntario ya validado; nunca elimina al jugador. */
+function spend(state: CucupolyState, from: string, amount: number): boolean {
+  return charge(state, from, null, amount, '', 'spend')
+}
+
+/** Ingreso de dinero (sueldo, premio, pozo, devolución). */
+function credit(state: CucupolyState, to: string, amount: number): void {
+  if (amount <= 0) return
+  state.money[to] = (state.money[to] ?? 0) + amount
 }
 
 function diceCount(state: CucupolyState): number {
@@ -566,6 +716,8 @@ export function init(players: Player[], seed: number): CucupolyState {
     roundNumber: 1,
     initialEvent: null,
     eventSeq: 0,
+    finalEvent: null,
+    finalEventSeq: 0,
     phase: 'turn-order-roll',
     owners: {},
     buildings: {},
@@ -630,6 +782,8 @@ export function reduce(
       return handleOpenInitialAuction(state, playerId)
     case 'start-initial-event':
       return handleStartInitialEvent(state, playerId, action.payload)
+    case 'start-final-event':
+      return handleStartFinalEvent(state, playerId, action.payload)
     case 'pay-bail':
       return handlePayBail(state, playerId)
     case 'activate-ability':
@@ -814,7 +968,7 @@ function handleRoll(state: CucupolyState, playerId: string): CucupolyState | { e
 
   const from = state.positions[playerId] ?? 0
   if (from + total >= 48) {
-    state.money[playerId] = (state.money[playerId] ?? 0) + RULES.goSalary
+    credit(state, playerId, RULES.goSalary)
     pushLog(state, `${state.names[playerId]} pasa por GO y cobra $${RULES.goSalary}.`)
     eventNotice(
       state,
@@ -898,7 +1052,7 @@ function handleLanding(
       pushLog(state, `Tesorería: ${card.text}.`)
       eventNotice(state, `Tesorería: ${state.names[playerId]} — ${card.text}.`)
       if (card.amount >= 0) {
-        state.money[playerId] = (state.money[playerId] ?? 0) + card.amount
+        credit(state, playerId, card.amount)
       } else {
         pay(state, playerId, null, -card.amount, 'carta de tesorería')
       }
@@ -992,10 +1146,14 @@ function handleBuy(state: CucupolyState, playerId: string): CucupolyState | { er
   if (isBlackoutActive(state)) return { error: 'Apagón: nadie puede comprar propiedades.' }
 
   const tile = BOARD[state.pendingBuy]
-  const price = purchasePriceFor(tile.price ?? 0, state.initialEvent, state.roundNumber)
-  if ((state.money[playerId] ?? 0) < price) return { error: 'No tienes dinero suficiente.' }
+  const price = purchasePriceFor(
+    tile.price ?? 0,
+    state.initialEvent,
+    state.roundNumber,
+    state.finalEvent,
+  )
+  if (!spend(state, playerId, price)) return { error: 'No tienes dinero suficiente.' }
 
-  state.money[playerId] = (state.money[playerId] ?? 0) - price
   state.owners[tile.index] = playerId
   pushLog(state, `${state.names[playerId]} compra ${tile.name} por $${price}.`)
   endTurn(state)
@@ -1035,13 +1193,15 @@ function handleBuild(
   const ruleError = buildRuleError(state, propertyId, playerId, kind)
   if (ruleError) return { error: ruleError }
 
-  const cost = buildCostFor(propertyId)
+  const cost = buildCostFor(
+    propertyId,
+    finalPriceMultiplier(state.finalEvent, state.roundNumber),
+  )
   if (cost === null) return { error: 'Esa propiedad no permite edificios.' }
-  if ((state.money[playerId] ?? 0) < cost) {
+  if (!spend(state, playerId, cost)) {
     return { error: 'No tienes dinero suficiente.' }
   }
 
-  state.money[playerId] = (state.money[playerId] ?? 0) - cost
   state.buildings[propertyId] = buildingLevelFor(state, propertyId) + 1
 
   const tile = BOARD[propertyId]
@@ -1108,7 +1268,7 @@ function handleStartInitialEvent(
 
   if (eventId === 'impulso_economico') {
     for (const id of activeIds(state)) {
-      state.money[id] = (state.money[id] ?? 0) + RULES.initialEventBoost
+      credit(state, id, RULES.initialEventBoost)
     }
     pushLog(
       state,
@@ -1129,6 +1289,94 @@ function handleStartInitialEvent(
     )
   }
 
+  state.phase = 'waiting-roll'
+  return state
+}
+
+function readFinalEventId(payload: unknown): FinalEventId | null {
+  if (typeof payload !== 'object' || payload === null) return null
+  const value = (payload as Record<string, unknown>).eventId
+  return isFinalEventId(value) ? value : null
+}
+
+/** La permutación debe contener exactamente una vez a cada jugador activo. */
+function readFinalOrder(payload: unknown, active: readonly string[]): string[] | null {
+  if (typeof payload !== 'object' || payload === null) return null
+  const raw = (payload as Record<string, unknown>).order
+  if (!Array.isArray(raw) || raw.length !== active.length) return null
+
+  const seen = new Set<string>()
+  for (const item of raw) {
+    if (typeof item !== 'string' || !active.includes(item) || seen.has(item)) return null
+    seen.add(item)
+  }
+  return [...raw]
+}
+
+/**
+ * Aplica el evento final sorteado por el anfitrión. El reducer sigue puro: la
+ * semilla de la permutación del caos llega ya decidida en el payload.
+ */
+function handleStartFinalEvent(
+  state: CucupolyState,
+  playerId: string,
+  payload: unknown,
+): CucupolyState | { error: string } {
+  if (playerId !== state.order[0]) {
+    return { error: 'Solo el anfitrión puede sortear el evento final.' }
+  }
+  if (state.phase !== 'final-event') {
+    return { error: 'No es el momento del evento final.' }
+  }
+  if (!isFinalEventRound(state.roundNumber)) {
+    return { error: 'Todavía no toca un evento final.' }
+  }
+  if (state.finalEvent?.startRound === state.roundNumber) {
+    return { error: 'El evento final de esta ronda ya ocurrió.' }
+  }
+
+  const eventId = readFinalEventId(payload)
+  if (!eventId) return { error: 'Evento final no válido.' }
+  if (state.finalEvent?.id === eventId) {
+    return { error: 'El evento final no puede repetirse dos veces seguidas.' }
+  }
+
+  const definition = FINAL_EVENTS[eventId]
+  const active = activeIds(state)
+  const order = definition.kind === 'chaos' ? readFinalOrder(payload, active) : null
+  if (definition.kind === 'chaos' && !order) {
+    return { error: 'La permutación del caos no es válida.' }
+  }
+
+  state.finalEvent = { id: eventId, startRound: state.roundNumber }
+  state.finalEventSeq += 1
+
+  pushLog(state, `Evento final: ${definition.name}.`)
+  eventNotice(state, `Evento final: ${definition.name} — ${definition.description}`)
+
+  if (definition.kind === 'inflation') {
+    ruleNotice(
+      state,
+      'Inflación alta: compras, construcción y alquileres cuestan el doble durante 3 rondas.',
+    )
+  } else if (definition.kind === 'taxes') {
+    // La ronda 12 del evento también cobra aquí, no solo en los cambios de ronda.
+    applyFinalTaxes(state)
+  } else if (definition.kind === 'chaos' && order) {
+    const before = { ...state.positions }
+    active.forEach((id, index) => {
+      state.positions[id] = before[order[index]] ?? 0
+    })
+    pushLog(state, 'Caos: los jugadores activos intercambian posiciones.')
+    for (const id of active) {
+      eventNotice(
+        state,
+        `Caos: ${state.names[id]} aparece en ${BOARD[state.positions[id]].name}.`,
+      )
+    }
+  }
+
+  if (isGameOver(state)) return state
   state.phase = 'waiting-roll'
   return state
 }
@@ -1301,8 +1549,7 @@ function resolveSealedAuction(state: CucupolyState, bids: SecretBid[]): void {
       state,
       `Subasta: nadie ofertó por ${BOARD[auction.tileId].name}; la propiedad queda sin dueño.`,
     )
-  } else {
-    state.money[winner.playerId] = (state.money[winner.playerId] ?? 0) - winner.amount
+  } else if (spend(state, winner.playerId, winner.amount)) {
     state.owners[auction.tileId] = winner.playerId
     pushLog(
       state,
@@ -1322,9 +1569,8 @@ function resolveOpenAuction(state: CucupolyState): void {
   const auction = state.auction
   if (!auction) return
 
-  if (auction.leader) {
+  if (auction.leader && spend(state, auction.leader, auction.leaderBid)) {
     const bid = auction.leaderBid
-    state.money[auction.leader] = (state.money[auction.leader] ?? 0) - bid
     state.owners[auction.tileId] = auction.leader
     pushLog(
       state,
@@ -1351,11 +1597,10 @@ function handlePayBail(state: CucupolyState, playerId: string): CucupolyState | 
     return { error: 'Solo puedes pagar la fianza en tu turno antes de tirar.' }
   }
   if (!state.inJail[playerId]) return { error: 'No estás en la cárcel.' }
-  if ((state.money[playerId] ?? 0) < RULES.jailFine) {
+  if (!spend(state, playerId, RULES.jailFine)) {
     return { error: 'No tienes dinero para la fianza.' }
   }
 
-  state.money[playerId] = (state.money[playerId] ?? 0) - RULES.jailFine
   state.inJail[playerId] = false
   state.jailTurns[playerId] = 0
   pushLog(state, `${state.names[playerId]} paga $${RULES.jailFine} y sale de la cárcel.`)
@@ -1498,18 +1743,20 @@ function handleAcceptTrade(
   if (trade.stage !== 'pending') return { error: 'El trato aún no está listo.' }
   if (playerId !== trade.to) return { error: 'Solo el receptor puede aceptar.' }
 
-  state.money[trade.from] =
-    (state.money[trade.from] ?? 0) - trade.giveMoney + trade.getMoney
-  state.money[trade.to] = (state.money[trade.to] ?? 0) + trade.giveMoney - trade.getMoney
-  for (const tileId of trade.giveTiles) state.owners[tileId] = trade.to
-  for (const tileId of trade.getTiles) state.owners[tileId] = trade.from
-
   const net = trade.giveMoney - trade.getMoney
   if (net > 0) {
+    if (!charge(state, trade.from, trade.to, net, 'intercambio', 'spend')) {
+      return { error: 'No hay dinero suficiente para cerrar el trato.' }
+    }
     moneyNotice(state, trade.from, trade.to, net, 'intercambio')
   } else if (net < 0) {
+    if (!charge(state, trade.to, trade.from, -net, 'intercambio', 'spend')) {
+      return { error: 'No hay dinero suficiente para cerrar el trato.' }
+    }
     moneyNotice(state, trade.to, trade.from, -net, 'intercambio')
   }
+  for (const tileId of trade.giveTiles) state.owners[tileId] = trade.to
+  for (const tileId of trade.getTiles) state.owners[tileId] = trade.from
 
   pushLog(state, `${state.names[trade.to]} acepta el trato de ${state.names[trade.from]}.`)
   const parts: string[] = []
@@ -1614,9 +1861,8 @@ function handleJoinTable(
   if (bet === null || bet < 1 || bet > RULES.table21BetLimit) {
     return { error: `La apuesta debe estar entre 1 y ${RULES.table21BetLimit}.` }
   }
-  if (bet > (state.money[playerId] ?? 0)) return { error: 'No tienes ese dinero.' }
+  if (!spend(state, playerId, bet)) return { error: 'No tienes ese dinero.' }
 
-  state.money[playerId] = (state.money[playerId] ?? 0) - bet
   table.bets[playerId] = bet
   table.cardCounts[playerId] = 0
   table.participants.push(playerId)
@@ -1861,7 +2107,7 @@ function handleSettleTable(
   const settlement = table.settlement
   for (const payout of settlement.payouts) {
     if (payout.amount <= 0) continue
-    state.money[payout.to] = (state.money[payout.to] ?? 0) + payout.amount
+    credit(state, payout.to, payout.amount)
     if (!settlement.allBusted) {
       moneyNotice(state, null, payout.to, payout.amount, 'pozo de la mesa de 21')
     }

@@ -251,8 +251,9 @@ export function Table21Panel({
           ? parsedPrivate.cards
           : []
   const myTotal = sum(myCards)
-  const myReady = table.ready.includes(me.id)
-  const myPending = table.pendingDraws.includes(me.id)
+  const isSpectator = state.bankrupt.includes(me.id)
+  const myReady = !isSpectator && table.ready.includes(me.id)
+  const myPending = !isSpectator && table.pendingDraws.includes(me.id)
   const myMoney = state.money[me.id] ?? 0
   const maxBet = Math.min(RULES.table21BetLimit, myMoney)
   const betValue = Number(bet)
@@ -306,7 +307,7 @@ export function Table21Panel({
             <p className="cp-table21-lead">
               Todos apuestan a la vez. Apuesta hasta {money(RULES.table21BetLimit)}.
             </p>
-            {table.pendingBets.includes(me.id) ? (
+            {!isSpectator && table.pendingBets.includes(me.id) ? (
               <div className="cp-table21-bet">
                 <input
                   type="number"
@@ -468,7 +469,7 @@ export function Table21Panel({
               })}
             </div>
 
-            {table.stage === 'draw' ? (
+            {table.stage === 'draw' && !isSpectator ? (
               <div className="cp-table21-actions">
                 {myReady ? (
                   <p className="muted small">Listo. Esperando a los demás…</p>

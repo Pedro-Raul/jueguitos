@@ -136,15 +136,125 @@ export function purchasePriceFor(
   basePrice: number,
   eventId: InitialEventId | null,
   round: number,
+  finalEvent: FinalEventState | null = null,
 ): number {
-  return isDiscountActive(eventId, round) ? Math.round(basePrice / 2) : basePrice
+  const discounted = isDiscountActive(eventId, round)
+    ? Math.round(basePrice / 2)
+    : basePrice
+  return Math.round(discounted * finalPriceMultiplier(finalEvent, round))
 }
 
 export function discountRoundsLeft(round: number): number {
   return Math.max(0, DISCOUNT_LAST_ROUND - round + 1)
 }
 
+/* ------------------------------------------------------------------ *
+ * Fase final de caos
+ * ------------------------------------------------------------------ */
+
+/** Primera ronda en la que se sortea un evento final. */
+export const FINAL_PHASE_START_ROUND = 12
+/** Cada cuántas rondas se reemplaza el evento final. */
+export const FINAL_EVENT_EVERY_ROUNDS = 3
+/** Tasa de impuestos altos sobre el efectivo de cada jugador. */
+export const TAX_RATE = 0.15
+
+export type FinalEventKind = 'inflation' | 'taxes' | 'chaos'
+
+export type FinalEventDefinition = {
+  name: string
+  description: string
+  icon: string
+  kind: FinalEventKind
+}
+
+/**
+ * Única tabla de la fase final: añadir un evento aquí (con un `kind` ya
+ * soportado) basta para que entre en el pool y en el HUD.
+ */
+export const FINAL_EVENTS = {
+  inflacion_alta: {
+    name: 'Inflación alta',
+    description: 'Compras, construcción y alquileres al doble durante 3 rondas.',
+    icon: '🔥',
+    kind: 'inflation',
+  },
+  impuestos_altos: {
+    name: 'Impuestos altos',
+    description: `Cada ronda del evento, el ${Math.round(TAX_RATE * 100)}% del efectivo va al banco.`,
+    icon: '🏛️',
+    kind: 'taxes',
+  },
+  caos: {
+    name: 'Caos',
+    description: 'Todos intercambian posiciones en el tablero.',
+    icon: '🌀',
+    kind: 'chaos',
+  },
+} as const satisfies Record<string, FinalEventDefinition>
+
+export type FinalEventId = keyof typeof FINAL_EVENTS
+
+export const FINAL_EVENT_POOL = Object.keys(FINAL_EVENTS) as FinalEventId[]
+
+/** Evento final vigente; `startRound` marca la ronda en que se sorteó. */
+export type FinalEventState = {
+  id: FinalEventId
+  startRound: number
+}
+
+export function isFinalEventId(value: unknown): value is FinalEventId {
+  return typeof value === 'string' && (FINAL_EVENT_POOL as readonly string[]).includes(value)
+}
+
+/** ¿Esta ronda es una de las que abren un evento final? */
+export function isFinalEventRound(round: number): boolean {
+  return (
+    round >= FINAL_PHASE_START_ROUND &&
+    (round - FINAL_PHASE_START_ROUND) % FINAL_EVENT_EVERY_ROUNDS === 0
+  )
+}
+
+/** El evento dura exactamente `FINAL_EVENT_EVERY_ROUNDS` rondas. */
+export function isFinalEventActive(
+  event: FinalEventState | null,
+  round: number,
+): boolean {
+  return (
+    event !== null &&
+    round >= event.startRound &&
+    round < event.startRound + FINAL_EVENT_EVERY_ROUNDS
+  )
+}
+
+export function finalEventRoundsLeft(
+  event: FinalEventState | null,
+  round: number,
+): number {
+  if (!event || !isFinalEventActive(event, round)) return 0
+  return event.startRound + FINAL_EVENT_EVERY_ROUNDS - round
+}
+
+/** Único multiplicador de precios, alquileres y costos de la fase final. */
+export function finalPriceMultiplier(
+  event: FinalEventState | null,
+  round: number,
+): number {
+  return isFinalEventActive(event, round) && event?.id === 'inflacion_alta' ? 2 : 1
+}
+
+/** Impuesto alto de una ronda: 15% del efectivo, redondeado hacia abajo. */
+export function finalTaxFor(cash: number): number {
+  return Math.floor(Math.max(0, cash) * TAX_RATE)
+}
+
+/** Eventos elegibles: nunca el mismo que acaba de terminar. */
+export function drawableFinalEvents(previous: FinalEventId | null): FinalEventId[] {
+  return FINAL_EVENT_POOL.filter((eventId) => eventId !== previous)
+}
+
 const EVENT_SEEN_KEY = 'jueguitos.cucupoly.eventSeen'
+const FINAL_EVENT_SEEN_KEY = 'jueguitos.cucupoly.finalEventSeen'
 
 /**
  * Evita repetir el anuncio al reconectar o recargar la pestaña. Se guarda por
@@ -166,6 +276,28 @@ export function markEventSeen(seed: number, seq: number): void {
   if (typeof window === 'undefined') return
   try {
     window.sessionStorage.setItem(EVENT_SEEN_KEY, JSON.stringify({ seed, seq }))
+  } catch {
+    // Sin sessionStorage (modo privado) el aviso puede repetirse; no es crítico.
+  }
+}
+
+/** Misma protección que el evento inicial, pero con su propia clave. */
+export function hasSeenFinalEvent(seed: number, seq: number): boolean {
+  if (typeof window === 'undefined') return false
+  try {
+    const raw = window.sessionStorage.getItem(FINAL_EVENT_SEEN_KEY)
+    if (!raw) return false
+    const parsed = JSON.parse(raw) as { seed?: number; seq?: number }
+    return parsed.seed === seed && (parsed.seq ?? 0) >= seq
+  } catch {
+    return false
+  }
+}
+
+export function markFinalEventSeen(seed: number, seq: number): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.sessionStorage.setItem(FINAL_EVENT_SEEN_KEY, JSON.stringify({ seed, seq }))
   } catch {
     // Sin sessionStorage (modo privado) el aviso puede repetirse; no es crítico.
   }
