@@ -22,9 +22,16 @@ import {
 import {
   pushEventNotice,
   pushMoneyNotice,
+  pushNotice,
   pushRuleNotice,
   type Notice,
 } from './notices'
+import {
+  buildCostFor,
+  buildingLevelFor,
+  buildRuleError,
+  rentRateFor,
+} from './buildings'
 import {
   table31Total,
   table31Transfers,
@@ -148,6 +155,8 @@ export type CucupolyState = {
   eventSeq: number
   phase: Phase
   owners: Record<number, string | null>
+  /** Nivel de construcción por casilla: 0..4 casas, 5 = hotel. */
+  buildings: Record<number, number>
   positions: Record<string, number>
   money: Record<string, number>
   inJail: Record<string, boolean>
@@ -262,7 +271,7 @@ export function rentFor(state: CucupolyState, tileId: number, diceTotal: number)
 
   let rent = 0
   if (tile.type === 'property') {
-    rent = Math.round((tile.price ?? 0) * RULES.propertyRentRate)
+    rent = Math.round((tile.price ?? 0) * rentRateFor(buildingLevelFor(state, tileId)))
   } else if (tile.type === 'bus') {
     const count = Math.min(Math.max(ownsType(state, owner, 'bus'), 1), 4)
     rent = RULES.busRents[count - 1]
@@ -299,6 +308,7 @@ function cloneState(source: CucupolyState): CucupolyState {
         }
       : null,
     owners: { ...source.owners },
+    buildings: { ...source.buildings },
     positions: { ...source.positions },
     money: { ...source.money },
     inJail: { ...source.inJail },
@@ -558,6 +568,7 @@ export function init(players: Player[], seed: number): CucupolyState {
     eventSeq: 0,
     phase: 'turn-order-roll',
     owners: {},
+    buildings: {},
     positions,
     money,
     inJail,
@@ -603,6 +614,10 @@ export function reduce(
       return handleBuy(state, playerId)
     case 'decline':
       return handleDecline(state, playerId)
+    case 'build-house':
+      return handleBuild(state, playerId, action.payload, 'house')
+    case 'build-hotel':
+      return handleBuild(state, playerId, action.payload, 'hotel')
     case 'secret-bid':
       return handleSecretBid(state, playerId, action.payload)
     case 'open-bid':
@@ -997,6 +1012,43 @@ function handleDecline(state: CucupolyState, playerId: string): CucupolyState | 
     `${state.names[playerId]} no compra${tile ? ` ${tile.name}` : ''}.`,
   )
   endTurn(state)
+  return state
+}
+
+/**
+ * Construye una casa o el hotel. Todas las reglas viven aquí: el cliente solo
+ * manda la propiedad y el anfitrión rechaza cualquier jugada ilegal.
+ */
+function handleBuild(
+  state: CucupolyState,
+  playerId: string,
+  payload: unknown,
+  kind: 'house' | 'hotel',
+): CucupolyState | { error: string } {
+  if (state.phase !== 'waiting-roll' || currentId(state) !== playerId) {
+    return { error: 'Solo puedes construir en tu turno antes de tirar.' }
+  }
+
+  const propertyId = readInt(payload, 'propertyId')
+  if (propertyId === null) return { error: 'Propiedad no válida.' }
+
+  const ruleError = buildRuleError(state, propertyId, playerId, kind)
+  if (ruleError) return { error: ruleError }
+
+  const cost = buildCostFor(propertyId)
+  if (cost === null) return { error: 'Esa propiedad no permite edificios.' }
+  if ((state.money[playerId] ?? 0) < cost) {
+    return { error: 'No tienes dinero suficiente.' }
+  }
+
+  state.money[playerId] = (state.money[playerId] ?? 0) - cost
+  state.buildings[propertyId] = buildingLevelFor(state, propertyId) + 1
+
+  const tile = BOARD[propertyId]
+  const what = kind === 'hotel' ? 'un hotel' : 'una casa'
+  const text = `${state.names[playerId]} construyó ${what} en ${tile.name} (−$${cost})`
+  pushLog(state, `${text}.`)
+  pushNotice(state, { kind: 'money', text, from: playerId, amount: cost })
   return state
 }
 

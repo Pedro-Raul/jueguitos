@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { isGameError, type Player } from '../../types'
 import { BOARD, BUS_TILES, WATER_TILE } from './board'
+import { HOTEL_LEVEL, MAX_HOUSES, buildCostFor } from './buildings'
 import {
   CHANCE_EVENTS,
   init,
@@ -1137,6 +1138,183 @@ describe('rentas', () => {
 
     state.owners[34] = 'p1'
     expect(rentFor(state, WATER_TILE, 7)).toBe(15 * 7)
+  })
+})
+
+describe('construcción de casas y hotel', () => {
+  /** Grupo marrón (1 y 3) en manos de Ana, listo para construir en su turno. */
+  function buildable(
+    levels: [number, number] = [0, 0],
+    money: number = RULES.startingMoney,
+  ): CucupolyState {
+    const state = fresh()
+    state.phase = 'waiting-roll'
+    state.currentIndex = 0
+    state.owners[1] = 'p1'
+    state.owners[3] = 'p1'
+    state.buildings[1] = levels[0]
+    state.buildings[3] = levels[1]
+    state.money.p1 = money
+    return state
+  }
+
+  it('solo construye con el grupo de color completo', () => {
+    const state = fresh()
+    state.phase = 'waiting-roll'
+    state.currentIndex = 0
+    state.owners[1] = 'p1' // falta Los Estoraques (3)
+    state.money.p1 = RULES.startingMoney
+
+    expect(
+      isGameError(reduce(state, { type: 'build-house', payload: { propertyId: 1 } }, 'p1')),
+    ).toBe(true)
+  })
+
+  it('solo el dueño construye y solo en su turno antes de tirar', () => {
+    const state = buildable()
+
+    // Otro jugador no puede construir sobre el grupo de Ana.
+    state.currentIndex = 1
+    expect(
+      isGameError(reduce(state, { type: 'build-house', payload: { propertyId: 1 } }, 'p2')),
+    ).toBe(true)
+
+    // Ni Ana fuera de su turno.
+    expect(
+      isGameError(reduce(state, { type: 'build-house', payload: { propertyId: 1 } }, 'p1')),
+    ).toBe(true)
+
+    // Ni después de tirar (fase distinta a waiting-roll).
+    const afterRoll = { ...state, currentIndex: 0, phase: 'buy-decision' as const, pendingBuy: 5 }
+    afterRoll.owners = { ...state.owners }
+    afterRoll.buildings = { ...state.buildings }
+    afterRoll.money = { ...state.money }
+    expect(
+      isGameError(reduce(afterRoll, { type: 'build-house', payload: { propertyId: 1 } }, 'p1')),
+    ).toBe(true)
+  })
+
+  it('no construye sin saldo suficiente', () => {
+    const state = buildable([0, 0], buildCostFor(1)! - 1)
+    expect(
+      isGameError(reduce(state, { type: 'build-house', payload: { propertyId: 1 } }, 'p1')),
+    ).toBe(true)
+    // Al límite exacto sí se puede.
+    const exact = buildable([0, 0], buildCostFor(1)!)
+    expect(
+      isGameError(reduce(exact, { type: 'build-house', payload: { propertyId: 1 } }, 'p1')),
+    ).toBe(false)
+  })
+
+  it('construye de forma pareja: máximo un nivel de diferencia', () => {
+    let state = buildable()
+    state = reduce(state, { type: 'build-house', payload: { propertyId: 1 } }, 'p1') as CucupolyState
+    expect(state.buildings[1]).toBe(1)
+    expect(state.buildings[3] ?? 0).toBe(0)
+
+    // La propiedad con menos nivel del grupo debe ir primero.
+    expect(
+      isGameError(reduce(state, { type: 'build-house', payload: { propertyId: 1 } }, 'p1')),
+    ).toBe(true)
+    state = reduce(state, { type: 'build-house', payload: { propertyId: 3 } }, 'p1') as CucupolyState
+    expect(state.buildings[3]).toBe(1)
+
+    // Ya nivelados, cualquiera puede subir.
+    state = reduce(state, { type: 'build-house', payload: { propertyId: 1 } }, 'p1') as CucupolyState
+    expect(state.buildings[1]).toBe(2)
+  })
+
+  it('tras 4 casas pasa al hotel y no admite más edificios', () => {
+    let state = buildable([4, 4])
+
+    // Con 4 casas ya no se pueden poner más casas.
+    expect(
+      isGameError(reduce(state, { type: 'build-house', payload: { propertyId: 1 } }, 'p1')),
+    ).toBe(true)
+    // El hotel exige 4 casas.
+    expect(
+      isGameError(reduce(buildable([3, 4]), { type: 'build-hotel', payload: { propertyId: 1 } }, 'p1')),
+    ).toBe(true)
+
+    state = reduce(state, { type: 'build-hotel', payload: { propertyId: 1 } }, 'p1') as CucupolyState
+    expect(state.buildings[1]).toBe(HOTEL_LEVEL)
+    expect(state.money.p1).toBe(RULES.startingMoney - buildCostFor(1)!)
+
+    // Ni otra casa ni otro hotel sobre la misma propiedad.
+    expect(
+      isGameError(reduce(state, { type: 'build-house', payload: { propertyId: 1 } }, 'p1')),
+    ).toBe(true)
+    expect(
+      isGameError(reduce(state, { type: 'build-hotel', payload: { propertyId: 1 } }, 'p1')),
+    ).toBe(true)
+
+    // El segundo hotel del grupo sí es legal ([5, 4]).
+    state = reduce(state, { type: 'build-hotel', payload: { propertyId: 3 } }, 'p1') as CucupolyState
+    expect(state.buildings[3]).toBe(HOTEL_LEVEL)
+  })
+
+  it('cada construcción descuenta su costo exacto y genera un aviso', () => {
+    const state = buildable()
+    const after = reduce(
+      state,
+      { type: 'build-house', payload: { propertyId: 1 } },
+      'p1',
+    ) as CucupolyState
+
+    expect(after.money.p1).toBe(RULES.startingMoney - buildCostFor(1)!)
+    const notice = after.notices.find((entry) => entry.kind === 'money')
+    expect(notice).toMatchObject({ from: 'p1', amount: buildCostFor(1) })
+    expect(notice?.text).toBe('Ana construyó una casa en Fortaleza (−$50)')
+
+    const hotelState = buildable([4, 4])
+    const hotel = reduce(
+      hotelState,
+      { type: 'build-hotel', payload: { propertyId: 1 } },
+      'p1',
+    ) as CucupolyState
+    const hotelNotice = hotel.notices.find((entry) => entry.kind === 'money')
+    expect(hotel.money.p1).toBe(RULES.startingMoney - buildCostFor(1)!)
+    expect(hotelNotice?.text).toBe('Ana construyó un hotel en Fortaleza (−$50)')
+  })
+
+  it('el alquiler mostrado y cobrado sigue la tabla por nivel', () => {
+    const state = fresh()
+    state.owners[1] = 'p1'
+    const price = BOARD[1].price ?? 0
+
+    for (let level = 0; level <= HOTEL_LEVEL; level += 1) {
+      state.buildings[1] = level
+      expect(rentFor(state, 1, 7)).toBe(Math.round(price * RULES.propertyRentRates[level]))
+    }
+    // 0 casas = 10%, 4 casas = 400%, hotel = 500%.
+    state.buildings[1] = 0
+    expect(rentFor(state, 1, 7)).toBe(6)
+    state.buildings[1] = MAX_HOUSES
+    expect(rentFor(state, 1, 7)).toBe(price * 4)
+    state.buildings[1] = HOTEL_LEVEL
+    expect(rentFor(state, 1, 7)).toBe(price * 5)
+  })
+
+  it('el cobro real de la renta coincide con rentFor', () => {
+    const state = fresh()
+    state.owners[1] = 'p2'
+    state.buildings[1] = 2
+    state.positions.p1 = 0
+    state.currentIndex = 0
+    state.phase = 'waiting-roll'
+    state.seed = seedForDie(1)
+    state.diceModifier = { from: 0, until: 1, dice: 1 }
+
+    const expected = rentFor(state, 1, 1)
+    expect(expected).toBe(Math.round((BOARD[1].price ?? 0) * 1.5))
+
+    const after = reduce(state, { type: 'roll' }, 'p1') as CucupolyState
+    expect(after.money.p1).toBe(RULES.startingMoney - expected)
+    expect(after.money.p2).toBe(RULES.startingMoney + expected)
+    const notice = after.notices.find(
+      (entry) => entry.kind === 'money' && entry.text.includes('alquiler'),
+    )
+    expect(notice?.amount).toBe(expected)
   })
 })
 

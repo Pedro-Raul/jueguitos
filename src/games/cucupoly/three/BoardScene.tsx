@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { Canvas, useThree } from '@react-three/fiber'
 import * as THREE from 'three'
 import { BOARD, gridPosition, type Tile } from '../board'
+import { HOTEL_LEVEL, MAX_HOUSES } from '../buildings'
 import type { CucupolyState } from '../engine'
 import type { Player } from '../../../types'
 import type { RollPlan } from '../planAnimations'
@@ -81,13 +82,50 @@ function OwnerFlag({ color }: { color: string }) {
   )
 }
 
+/** Casas (cajas pequeñas) o hotel (volumen mayor) sobre la casilla. */
+function Buildings({ level }: { level: number }) {
+  if (level <= 0) return null
+
+  if (level >= HOTEL_LEVEL) {
+    return (
+      <group position={[0, TILE_TOP, 0.3]}>
+        <mesh position={[0, 0.15, 0]} castShadow>
+          <boxGeometry args={[0.32, 0.3, 0.18]} />
+          <meshStandardMaterial color="#C0392B" roughness={0.55} metalness={0.05} />
+        </mesh>
+        <mesh position={[0, 0.33, 0]} castShadow>
+          <boxGeometry args={[0.36, 0.06, 0.2]} />
+          <meshStandardMaterial color="#7B241C" roughness={0.6} />
+        </mesh>
+      </group>
+    )
+  }
+
+  const count = Math.min(level, MAX_HOUSES)
+  return (
+    <group position={[0, TILE_TOP, 0.3]}>
+      {Array.from({ length: count }, (_, index) => {
+        const x = (index - (count - 1) / 2) * 0.19
+        return (
+          <mesh key={index} position={[x, 0.07, 0]} castShadow>
+            <boxGeometry args={[0.13, 0.14, 0.13]} />
+            <meshStandardMaterial color="#2E7D32" roughness={0.6} />
+          </mesh>
+        )
+      })}
+    </group>
+  )
+}
+
 function TileMesh({
   tile,
   ownerColor,
+  level,
   onSelect,
 }: {
   tile: Tile
   ownerColor: string | null
+  level: number
   onSelect: (index: number) => void
 }) {
   const texture = useMemo(() => createTileTexture(tile), [tile])
@@ -135,6 +173,7 @@ function TileMesh({
         />
       </mesh>
       {ownerColor ? <OwnerFlag color={ownerColor} /> : null}
+      <Buildings level={level} />
     </group>
   )
 }
@@ -177,6 +216,7 @@ function Board({
             key={tile.index}
             tile={tile}
             ownerColor={owner?.color ?? null}
+            level={state.buildings?.[tile.index] ?? 0}
             onSelect={onSelectTile}
           />
         )

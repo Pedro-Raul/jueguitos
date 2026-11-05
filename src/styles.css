@@ -1383,6 +1383,23 @@ button {
   font-size: 0.78rem;
 }
 
+.cp-build select {
+  width: 100%;
+}
+
+.cp-build-facts {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.82rem;
+}
+
+.cp-build-facts span {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
 /* Tarjeta de casilla */
 
 .cp-sheet-backdrop {

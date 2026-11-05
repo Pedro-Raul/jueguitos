@@ -11,8 +11,25 @@ export const RULES = {
   jailFine: 50,
   /** SUPUESTO: turnos que hay que esperar en la cárcel si no se paga la fianza. */
   jailTurns: 3,
-  /** SUPUESTO: renta de propiedad = 10% del precio, redondeada. */
-  propertyRentRate: 0.1,
+  /**
+   * SUPUESTO: renta de propiedad como múltiplo del precio según el nivel de
+   * construcción (0 casas, 1..4 casas, 5 = hotel).
+   */
+  propertyRentRates: [0.1, 0.5, 1.5, 3, 4, 5],
+  /**
+   * SUPUESTO: costo de una casa según el grupo de color. El hotel cuesta lo
+   * mismo que una casa (es el quinto edificio del grupo).
+   */
+  buildingCosts: {
+    '#85200C': 50, // Marrón
+    '#9FC5E8': 50, // Azul claro
+    '#FF00FF': 100, // Magenta
+    '#FF9900': 100, // Naranja
+    '#FF0000': 150, // Rojo
+    '#FFFF00': 150, // Amarillo
+    '#93C47D': 200, // Verde
+    '#0000FF': 200, // Azul
+  },
   /** SUPUESTO: renta de busetas según cuántas tenga el dueño (1..4). */
   busRents: [25, 50, 100, 200],
   /** SUPUESTO: multiplicador de renta de servicios según cuántos tenga el dueño (1..3). */

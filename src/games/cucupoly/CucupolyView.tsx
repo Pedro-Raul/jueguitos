@@ -2,6 +2,14 @@ import { lazy, Suspense, useCallback, useEffect, useRef, useState, type CSSPrope
 import type { GameAction, GameViewProps, Player } from '../../types'
 import { BOARD } from './board'
 import {
+  HOTEL_LEVEL,
+  MAX_HOUSES,
+  buildCostFor,
+  buildingLevelFor,
+  buildRuleError,
+  completeGroupsFor,
+} from './buildings'
+import {
   AUCTION_NAMES,
   rentFor,
   type CucupolyState,
@@ -50,6 +58,12 @@ const BoardScene = lazy(() => import('./three/BoardScene'))
 
 function money(value: number): string {
   return `$${value}`
+}
+
+function buildingLabel(level: number): string {
+  if (level >= HOTEL_LEVEL) return 'Hotel'
+  if (level === 0) return 'sin edificios'
+  return `${level} ${level === 1 ? 'casa' : 'casas'}`
 }
 
 function nameOf(state: CucupolyState, id: string | null): string {
@@ -606,7 +620,98 @@ function ActionPanel({ state, me, dispatch }: PanelProps) {
           ) : null}
         </details>
       ) : null}
+
+      <BuildPanel state={state} me={me} dispatch={dispatch} myMoney={myMoney} />
     </div>
+  )
+}
+
+/** Panel de construcción: solo grupos completos del jugador, con costo y nivel. */
+function BuildPanel({ state, me, dispatch, myMoney }: PanelProps & { myMoney: number }) {
+  const [selected, setSelected] = useState<number | ''>('')
+  const groups = completeGroupsFor(state, me.id)
+
+  if (groups.length === 0) {
+    return (
+      <details className="cp-trade cp-build">
+        <summary>Construir</summary>
+        <p className="muted small">
+          Necesitas un grupo de color completo para construir casas u hoteles.
+        </p>
+      </details>
+    )
+  }
+
+  const tileId = selected === '' ? null : Number(selected)
+  const tile = tileId === null ? null : BOARD[tileId]
+  const level = tileId === null ? 0 : buildingLevelFor(state, tileId)
+  const cost = tileId === null ? null : buildCostFor(tileId)
+  const isHotel = level >= MAX_HOUSES
+  const error =
+    tileId === null ? null : buildRuleError(state, tileId, me.id, isHotel ? 'hotel' : 'house')
+  const affordable = cost !== null && myMoney >= cost
+  const canBuild = tileId !== null && error === null && affordable
+
+  return (
+    <details className="cp-trade cp-build">
+      <summary>Construir</summary>
+      <p className="muted small">
+        Solo en grupos de color completos y de forma pareja. Tras {MAX_HOUSES} casas se monta el
+        hotel.
+      </p>
+      <select
+        value={selected}
+        onChange={(event) =>
+          setSelected(event.target.value === '' ? '' : Number(event.target.value))
+        }
+      >
+        <option value="">Elige propiedad</option>
+        {groups.map((group) => (
+          <optgroup key={group.color} label={`${group.name} · ${money(group.cost)} por edificio`}>
+            {group.tiles.map((id) => (
+              <option key={id} value={id}>
+                {BOARD[id].name} · {buildingLabel(buildingLevelFor(state, id))}
+              </option>
+            ))}
+          </optgroup>
+        ))}
+      </select>
+
+      {tile && cost !== null ? (
+        <>
+          <div className="cp-build-facts">
+            <span>
+              Nivel actual: <strong>{buildingLabel(level)}</strong>
+            </span>
+            <span>
+              Costo: <strong>{money(cost)}</strong>
+            </span>
+            <span>
+              Alquiler: <strong>{money(rentFor(state, tile.index, state.dice?.total ?? 7))}</strong>
+            </span>
+          </div>
+          {error ? <p className="muted small">{error}</p> : null}
+          {!error && !affordable ? (
+            <p className="muted small">No tienes saldo suficiente.</p>
+          ) : null}
+          <div className="actions">
+            <button
+              className="primary"
+              type="button"
+              disabled={!canBuild}
+              onClick={() =>
+                dispatch({
+                  type: isHotel ? 'build-hotel' : 'build-house',
+                  payload: { propertyId: tile.index },
+                })
+              }
+            >
+              {isHotel ? 'Montar hotel' : 'Construir casa'} {money(cost)}
+            </button>
+          </div>
+        </>
+      ) : null}
+    </details>
   )
 }
 
@@ -625,6 +730,7 @@ function TileSheet({
   const ownerId = state.owners[index] ?? null
   const owner = ownerId ? players.find((player) => player.id === ownerId) : undefined
   const rent = ownerId && isPurchasable(tile) ? rentFor(state, index, state.dice?.total ?? 7) : null
+  const level = state.buildings[index] ?? 0
   // Mismo cálculo que `handleBuy`: lo mostrado y lo cobrado no pueden divergir.
   const purchasePrice =
     tile.price === undefined
@@ -673,6 +779,12 @@ function TileSheet({
             <div>
               <dt>Renta</dt>
               <dd>{money(rent)}</dd>
+            </div>
+          ) : null}
+          {level > 0 ? (
+            <div>
+              <dt>Edificios</dt>
+              <dd>{buildingLabel(level)}</dd>
             </div>
           ) : null}
           {tile.tax !== undefined ? (
