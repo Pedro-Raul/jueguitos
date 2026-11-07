@@ -4,6 +4,7 @@ import { BOARD, BUS_TILES, WATER_TILE } from './board'
 import { HOTEL_LEVEL, MAX_HOUSES, buildCostFor } from './buildings'
 import {
   CHANCE_EVENTS,
+  getDiceCount,
   init,
   nextSeed,
   reduce,
@@ -15,30 +16,39 @@ import {
   AUCTION_OPEN_IDLE_TICKS,
   EVENTS,
   EVENT_BANNER_MS,
-  FINAL_EVENT_EVERY_ROUNDS,
   FINAL_EVENT_POOL,
-  FINAL_EVENTS,
   FINAL_PHASE_START_ROUND,
   INITIAL_EVENT_POOL,
   MIN_RAISE,
+  NORMAL_EVENT_POOL,
   TAX_RATE,
   drawableEvents,
-  drawableFinalEvents,
-  finalEventRoundsLeft,
-  finalPriceMultiplier,
+  eventDurationRounds,
+  eventPoolForRound,
+  eventRoundsLeft,
+  eventPriceMultiplier,
   finalTaxFor,
   freeAuctionTiles,
-  isFinalEventActive,
-  isFinalEventRound,
+  isAuctionEvent,
+  isFinalEventId,
   purchasePriceFor,
+  type ActiveEvent,
+  type GameEventId,
 } from './events'
+import {
+  EVENT_GAP_MAX_ROUNDS,
+  EVENT_GAP_MIN_ROUNDS,
+  requestDiceEvent,
+} from './eventScheduler'
 import { RULES } from './rules.config'
 
 const ANA: Player = { id: 'p1', name: 'Ana', emoji: '🐙', color: '#e11d48', connected: true }
 const BETO: Player = { id: 'p2', name: 'Beto', emoji: '🦊', color: '#2563eb', connected: true }
 const CARO: Player = { id: 'p3', name: 'Caro', emoji: '🐸', color: '#16a34a', connected: true }
+const DORA: Player = { id: 'p4', name: 'Dora', emoji: '🐼', color: '#9333ea', connected: true }
 const TWO = [ANA, BETO]
 const THREE = [ANA, BETO, CARO]
+const FOUR = [ANA, BETO, CARO, DORA]
 
 /**
  * Estado limpio para aislar la regla bajo prueba. `init` arranca en el sorteo
@@ -106,6 +116,26 @@ function rollOutcome(seed: number, dice: number): { total: number; seed: number 
     total += 1 + Math.floor(next.value * 6)
   }
   return { total, seed: current }
+}
+
+/** Primer seed cuya tirada de `dice` dados suma exactamente `target`. */
+function seedForTotal(dice: number, target: number): number {
+  for (let seed = 1; seed < 100_000; seed += 1) {
+    if (rollOutcome(seed, dice).total === target) return seed
+  }
+  throw new Error(`Sin seed para ${dice} dados que sumen ${target}`)
+}
+
+/** Valores de la última tirada del jugador, aunque el turno ya haya cerrado. */
+function lastRollValues(state: CucupolyState, name: string): number[] {
+  const entry = [...state.log].reverse().find((item) => item.text.includes(`${name} tira `))
+  const match = entry?.text.match(/tira ([0-9+]+) =/)
+  return match ? match[1].split('+').map(Number) : []
+}
+
+/** Evento activo con la duración real del catálogo. */
+function activeEventFor(id: GameEventId, startRound: number): ActiveEvent {
+  return { id, startRound, endRound: startRound + eventDurationRounds(id) - 1 }
 }
 
 /** Seed que, tras `dice` dados, saca el evento de sorpresa `eventIndex`. */
@@ -237,23 +267,26 @@ describe('evento inicial: ronda 2', () => {
     expect(state.money.p1).toBe(before.p1 + RULES.initialEventBoost)
   })
 
-  it('Semana de descuentos: mitad de precio solo en las rondas 3, 4 y 5', () => {
-    expect(purchasePriceFor(100, 'semana_descuentos', 2)).toBe(100)
-    expect(purchasePriceFor(100, 'semana_descuentos', 3)).toBe(50)
-    expect(purchasePriceFor(100, 'semana_descuentos', 4)).toBe(50)
-    expect(purchasePriceFor(100, 'semana_descuentos', 5)).toBe(50)
-    expect(purchasePriceFor(100, 'semana_descuentos', 6)).toBe(100)
-    expect(purchasePriceFor(100, 'impulso_economico', 3)).toBe(100)
-    expect(purchasePriceFor(100, null, 3)).toBe(100)
+  it('Semana de descuentos: mitad de precio solo en las rondas 2, 3 y 4', () => {
+    const discount = activeEventFor('semana_descuentos', 2)
+    expect(purchasePriceFor(100, discount, 1)).toBe(100)
+    expect(purchasePriceFor(100, discount, 2)).toBe(50)
+    expect(purchasePriceFor(100, discount, 3)).toBe(50)
+    expect(purchasePriceFor(100, discount, 4)).toBe(50)
+    expect(purchasePriceFor(100, discount, 5)).toBe(100)
+    expect(purchasePriceFor(100, activeEventFor('impulso_economico', 2), 2)).toBe(100)
+    expect(purchasePriceFor(100, null, 2)).toBe(100)
     // Redondeo a entero.
-    expect(purchasePriceFor(75, 'semana_descuentos', 3)).toBe(38)
+    expect(purchasePriceFor(75, discount, 2)).toBe(38)
   })
 
   it('Semana de descuentos: el cobro coincide con el precio mostrado', () => {
     const basePrice = BOARD[1].price ?? 0
-    const discounted = purchasePriceFor(basePrice, 'semana_descuentos', 3)
+    const discount = activeEventFor('semana_descuentos', 2)
+    const discounted = purchasePriceFor(basePrice, discount, 3)
 
     const state = fresh(TWO, 99)
+    state.activeEvent = discount
     state.initialEvent = 'semana_descuentos'
     state.roundNumber = 3
     state.phase = 'buy-decision'
@@ -266,9 +299,10 @@ describe('evento inicial: ronda 2', () => {
     expect(after.money.p1).toBe(RULES.startingMoney - Math.round(basePrice / 2))
   })
 
-  it('Semana de descuentos: en la ronda 6 vuelve a cobrar el precio completo', () => {
+  it('Semana de descuentos: fuera de su ventana vuelve a cobrar el precio completo', () => {
     const basePrice = BOARD[1].price ?? 0
     const state = fresh(TWO, 99)
+    state.activeEvent = activeEventFor('semana_descuentos', 2)
     state.initialEvent = 'semana_descuentos'
     state.roundNumber = 6
     state.phase = 'buy-decision'
@@ -280,7 +314,7 @@ describe('evento inicial: ronda 2', () => {
   })
 })
 
-describe('eventos finales: caos desde la ronda 12', () => {
+describe('planificador de eventos', () => {
   /** Avanza `rounds` rondas completas cerrando turnos sin tirar. */
   function advanceRounds(state: CucupolyState, rounds: number): CucupolyState {
     let next = state
@@ -291,124 +325,106 @@ describe('eventos finales: caos desde la ronda 12', () => {
     return next
   }
 
-  it('no hay evento final antes de la ronda 12 y se abre justo al llegar', () => {
-    let state = fresh(TWO, 99)
+  function startEvent(
+    state: CucupolyState,
+    payload: Record<string, unknown>,
+    host = state.order[0],
+  ): CucupolyState | { error: string } {
+    return reduce(state, { type: 'start-event', payload }, host)
+  }
 
-    state = advanceRounds(state, 10)
-    expect(state.roundNumber).toBe(11)
-    expect(state.finalEvent).toBeNull()
-    expect(state.phase).toBe('waiting-roll')
+  it('no hay eventos finales antes de la ronda 40 y desde ahí solo hay finales', () => {
+    const owners: Record<number, string> = {}
+    for (const tile of BOARD) {
+      if (tile.price !== undefined) owners[tile.index] = 'p1'
+    }
 
-    state = advanceRounds(state, 1)
-    expect(state.roundNumber).toBe(12)
-    expect(state.phase).toBe('final-event')
-    expect(state.finalEvent).toBeNull()
-    expect(state.finalEventSeq).toBe(0)
+    const before = eventPoolForRound(FINAL_PHASE_START_ROUND - 1, owners, null)
+    expect(before.some((id) => isFinalEventId(id))).toBe(false)
+    expect(before.every((id) => NORMAL_EVENT_POOL.includes(id as never))).toBe(true)
 
-    // Nadie puede tirar y solo el anfitrión sortea.
-    expect(isGameError(reduce(state, { type: 'roll' }, 'p1'))).toBe(true)
+    const final = eventPoolForRound(FINAL_PHASE_START_ROUND, owners, null)
+    expect(final).toEqual([...FINAL_EVENT_POOL])
+    expect(final.every((id) => isFinalEventId(id))).toBe(true)
     expect(
-      isGameError(
-        reduce(
-          state,
-          { type: 'start-final-event', payload: { eventId: 'inflacion_alta' } },
-          'p2',
-        ),
-      ),
-    ).toBe(true)
-    expect(
-      isGameError(
-        reduce(
-          state,
-          { type: 'start-final-event', payload: { eventId: 'evento_inventado' } },
-          'p1',
-        ),
-      ),
-    ).toBe(true)
+      eventPoolForRound(FINAL_PHASE_START_ROUND + 3, owners, 'caos'),
+    ).not.toContain('caos')
 
-    state = reduce(
-      state,
-      { type: 'start-final-event', payload: { eventId: 'inflacion_alta' } },
-      'p1',
-    ) as CucupolyState
-    expect(state.finalEvent).toEqual({ id: 'inflacion_alta', startRound: 12 })
-    expect(state.finalEventSeq).toBe(1)
-    expect(state.phase).toBe('waiting-roll')
-    expect(state.notices.some((notice) => notice.text.includes('Inflación alta'))).toBe(true)
-
-    // Dura 3 rondas: 13 y 14 no vuelven a sortear.
-    state = advanceRounds(state, 1)
-    expect(state.roundNumber).toBe(13)
-    expect(state.phase).toBe('waiting-roll')
-    expect(state.finalEventSeq).toBe(1)
-
-    state = advanceRounds(state, 1)
-    expect(state.roundNumber).toBe(14)
-    expect(state.phase).toBe('waiting-roll')
-    expect(state.finalEventSeq).toBe(1)
-    expect(isFinalEventActive(state.finalEvent, 12)).toBe(true)
-    expect(isFinalEventActive(state.finalEvent, 14)).toBe(true)
-    expect(isFinalEventActive(state.finalEvent, 15)).toBe(false)
-    expect(finalEventRoundsLeft(state.finalEvent, 12)).toBe(3)
-    expect(finalEventRoundsLeft(state.finalEvent, 14)).toBe(1)
-
-    // Ronda 15: el siguiente reemplaza al anterior.
-    state = advanceRounds(state, 1)
-    expect(state.roundNumber).toBe(15)
-    expect(state.phase).toBe('final-event')
-    expect(state.finalEvent?.id).toBe('inflacion_alta')
-
-    // No se puede repetir el mismo dos veces seguidas.
-    expect(
-      isGameError(
-        reduce(
-          state,
-          { type: 'start-final-event', payload: { eventId: 'inflacion_alta' } },
-          'p1',
-        ),
-      ),
-    ).toBe(true)
-
-    state = reduce(
-      state,
-      { type: 'start-final-event', payload: { eventId: 'impuestos_altos' } },
-      'p1',
-    ) as CucupolyState
-    expect(state.finalEvent).toEqual({ id: 'impuestos_altos', startRound: 15 })
-    expect(state.finalEventSeq).toBe(2)
-    expect(state.phase).toBe('waiting-roll')
+    const state = fresh(TWO, 99)
+    state.roundNumber = FINAL_PHASE_START_ROUND - 1
+    state.nextEventRound = state.roundNumber
+    state.phase = 'event'
+    expect(isGameError(startEvent(state, { eventId: 'inflacion_alta' }))).toBe(true)
   })
 
-  it('el pool evita repetir el anterior y la cadencia es cada 3 rondas', () => {
-    expect(drawableFinalEvents(null)).toEqual([...FINAL_EVENT_POOL])
-    expect(drawableFinalEvents('caos')).not.toContain('caos')
-    expect(isFinalEventRound(FINAL_PHASE_START_ROUND - 1)).toBe(false)
-    expect(isFinalEventRound(FINAL_PHASE_START_ROUND)).toBe(true)
-    expect(
-      isFinalEventRound(FINAL_PHASE_START_ROUND + FINAL_EVENT_EVERY_ROUNDS - 1),
-    ).toBe(false)
-    expect(isFinalEventRound(FINAL_PHASE_START_ROUND + FINAL_EVENT_EVERY_ROUNDS)).toBe(true)
+  it('un evento final dura rondas completas y deja una pausa de 4 a 8', () => {
+    let state = fresh(TWO, 99)
+    state.roundNumber = FINAL_PHASE_START_ROUND
+    state.nextEventRound = FINAL_PHASE_START_ROUND
+    state.phase = 'event'
 
-    for (const id of FINAL_EVENT_POOL) {
-      expect(FINAL_EVENTS[id].name.length).toBeGreaterThan(0)
-      expect(FINAL_EVENTS[id].description.length).toBeGreaterThan(0)
-    }
+    state = startEvent(state, {
+      eventId: 'inflacion_alta',
+      gapRounds: 4,
+    }) as CucupolyState
+    expect(state.activeEvent).toEqual({
+      id: 'inflacion_alta',
+      startRound: FINAL_PHASE_START_ROUND,
+      endRound: FINAL_PHASE_START_ROUND + 2,
+    })
+    expect(state.nextEventRound).toBe(FINAL_PHASE_START_ROUND + 3 + 4)
+    expect(state.finalEvent).toEqual({
+      id: 'inflacion_alta',
+      startRound: FINAL_PHASE_START_ROUND,
+    })
+    expect(state.finalEventSeq).toBe(1)
+
+    // Rondas 41 y 42 siguen dentro del evento.
+    state = advanceRounds(state, 1)
+    expect(state.roundNumber).toBe(FINAL_PHASE_START_ROUND + 1)
+    expect(state.activeEvent?.id).toBe('inflacion_alta')
+    state = advanceRounds(state, 1)
+    expect(state.roundNumber).toBe(FINAL_PHASE_START_ROUND + 2)
+    expect(state.activeEvent?.endRound).toBe(FINAL_PHASE_START_ROUND + 2)
+
+    // Tras el último turno de la ronda 42 el evento se cierra y empieza la pausa.
+    state = advanceRounds(state, 1)
+    expect(state.roundNumber).toBe(FINAL_PHASE_START_ROUND + 3)
+    expect(state.activeEvent).toBeNull()
+    expect(state.phase).toBe('waiting-roll')
+    state = advanceRounds(state, 3)
+    expect(state.roundNumber).toBe(state.nextEventRound - 1)
+    expect(state.phase).toBe('waiting-roll')
+    state = advanceRounds(state, 1)
+    expect(state.roundNumber).toBe(state.nextEventRound)
+    expect(state.phase).toBe('event')
+
+    // No puede repetirse el mismo final dos veces seguidas.
+    expect(isGameError(startEvent(state, { eventId: 'inflacion_alta' }))).toBe(true)
+    const next = startEvent(state, {
+      eventId: 'impuestos_altos',
+      gapRounds: 8,
+    }) as CucupolyState
+    expect(next.activeEvent?.id).toBe('impuestos_altos')
+    expect(next.nextEventRound).toBe(FINAL_PHASE_START_ROUND + 3 + 4 + 3 + 8)
   })
 
   it('inflación: duplica compra, construcción y alquiler solo mientras dura', () => {
-    const finalEvent = { id: 'inflacion_alta' as const, startRound: 12 }
-    expect(finalPriceMultiplier(finalEvent, 11)).toBe(1)
-    expect(finalPriceMultiplier(finalEvent, 12)).toBe(2)
-    expect(finalPriceMultiplier(finalEvent, 14)).toBe(2)
-    expect(finalPriceMultiplier(finalEvent, 15)).toBe(1)
+    const inflation = activeEventFor('inflacion_alta', 12)
+    expect(eventPriceMultiplier(inflation, 11)).toBe(1)
+    expect(eventPriceMultiplier(inflation, 12)).toBe(2)
+    expect(eventPriceMultiplier(inflation, 14)).toBe(2)
+    expect(eventPriceMultiplier(inflation, 15)).toBe(1)
+    expect(eventRoundsLeft(inflation, 12)).toBe(3)
+    expect(eventRoundsLeft(inflation, 14)).toBe(1)
 
     const basePrice = BOARD[1].price ?? 0
-    expect(purchasePriceFor(basePrice, null, 12, finalEvent)).toBe(basePrice * 2)
-    expect(purchasePriceFor(basePrice, null, 15, finalEvent)).toBe(basePrice)
+    expect(purchasePriceFor(basePrice, inflation, 12)).toBe(basePrice * 2)
+    expect(purchasePriceFor(basePrice, inflation, 15)).toBe(basePrice)
 
     // Cobro de compra: coincide con el precio efectivo mostrado.
     const purchase = fresh(TWO, 99)
-    purchase.finalEvent = finalEvent
+    purchase.activeEvent = inflation
     purchase.roundNumber = 12
     purchase.phase = 'buy-decision'
     purchase.pendingBuy = 1
@@ -419,7 +435,7 @@ describe('eventos finales: caos desde la ronda 12', () => {
 
     // Construcción: el grupo marrón cuesta el doble.
     const build = fresh(TWO, 99)
-    build.finalEvent = finalEvent
+    build.activeEvent = inflation
     build.roundNumber = 12
     build.phase = 'waiting-roll'
     build.currentIndex = 0
@@ -435,17 +451,16 @@ describe('eventos finales: caos desde la ronda 12', () => {
 
     // Alquiler: Fortaleza rinde 6 y con inflación 12.
     const rent = fresh(TWO, 99)
-    rent.finalEvent = finalEvent
+    rent.activeEvent = inflation
     rent.roundNumber = 12
     rent.owners[1] = 'p2'
-    rent.positions.p1 = 0
+    rent.positions.p1 = 47
     rent.currentIndex = 0
     rent.phase = 'waiting-roll'
-    rent.seed = seedForDie(1)
-    rent.diceModifier = { from: 0, until: 1, dice: 1 }
+    rent.seed = seedForTotal(2, 2) // 47 + 2 = 1 (Fortaleza)
     expect(rentFor(rent, 1, 7)).toBe(12)
     const afterRent = reduce(rent, { type: 'roll' }, 'p1') as CucupolyState
-    expect(afterRent.money.p1).toBe(RULES.startingMoney - 12)
+    expect(afterRent.money.p1).toBe(RULES.startingMoney + RULES.goSalary - 12)
     expect(afterRent.money.p2).toBe(RULES.startingMoney + 12)
   })
 
@@ -455,43 +470,49 @@ describe('eventos finales: caos desde la ronda 12', () => {
     expect(finalTaxFor(0)).toBe(0)
 
     let state = fresh(TWO, 99)
-    state.roundNumber = 12
-    state.phase = 'final-event'
+    state.roundNumber = FINAL_PHASE_START_ROUND
+    state.nextEventRound = FINAL_PHASE_START_ROUND
+    state.phase = 'event'
     state.currentIndex = 0
     state.money.p1 = 100
     state.money.p2 = 55
 
-    state = reduce(
-      state,
-      { type: 'start-final-event', payload: { eventId: 'impuestos_altos' } },
-      'p1',
-    ) as CucupolyState
-    expect(state.finalEvent).toEqual({ id: 'impuestos_altos', startRound: 12 })
+    state = startEvent(state, {
+      eventId: 'impuestos_altos',
+      gapRounds: 4,
+    }) as CucupolyState
+    expect(state.activeEvent).toEqual({
+      id: 'impuestos_altos',
+      startRound: FINAL_PHASE_START_ROUND,
+      endRound: FINAL_PHASE_START_ROUND + 2,
+    })
     expect(state.money.p1).toBe(100 - 15)
     expect(state.money.p2).toBe(55 - 8) // floor(55 * 0.15)
 
     state = advanceRounds(state, 1)
-    expect(state.roundNumber).toBe(13)
+    expect(state.roundNumber).toBe(FINAL_PHASE_START_ROUND + 1)
     expect(state.money.p1).toBe(85 - Math.floor(85 * TAX_RATE))
     expect(state.money.p2).toBe(47 - Math.floor(47 * TAX_RATE))
 
     state = advanceRounds(state, 1)
-    expect(state.roundNumber).toBe(14)
+    expect(state.roundNumber).toBe(FINAL_PHASE_START_ROUND + 2)
     expect(state.money.p1).toBe(73 - Math.floor(73 * TAX_RATE))
     expect(state.money.p2).toBe(40 - Math.floor(40 * TAX_RATE))
 
-    // Ronda 15: el evento terminó y arranca el siguiente sorteo, sin otro cobro.
+    // La ronda siguiente: el evento terminó y empieza la pausa, sin otro cobro.
     const before = { ...state.money }
     state = advanceRounds(state, 1)
-    expect(state.roundNumber).toBe(15)
-    expect(state.phase).toBe('final-event')
+    expect(state.roundNumber).toBe(FINAL_PHASE_START_ROUND + 3)
+    expect(state.phase).toBe('waiting-roll')
+    expect(state.activeEvent).toBeNull()
     expect(state.money).toEqual(before)
   })
 
   it('caos: permutación válida, sin cobrar Salida ni activar casillas', () => {
     const state = fresh(THREE, 99)
-    state.roundNumber = 12
-    state.phase = 'final-event'
+    state.roundNumber = FINAL_PHASE_START_ROUND
+    state.nextEventRound = FINAL_PHASE_START_ROUND
+    state.phase = 'event'
     state.currentIndex = 0
     state.positions.p1 = 47
     state.positions.p2 = 0
@@ -500,32 +521,18 @@ describe('eventos finales: caos desde la ronda 12', () => {
 
     // Permutación incompleta o con duplicados: se rechaza.
     expect(
-      isGameError(
-        reduce(
-          state,
-          { type: 'start-final-event', payload: { eventId: 'caos', order: ['p1', 'p2'] } },
-          'p1',
-        ),
-      ),
+      isGameError(startEvent(state, { eventId: 'caos', order: ['p1', 'p2'] })),
     ).toBe(true)
     expect(
       isGameError(
-        reduce(
-          state,
-          {
-            type: 'start-final-event',
-            payload: { eventId: 'caos', order: ['p1', 'p1', 'p3'] },
-          },
-          'p1',
-        ),
+        startEvent(state, { eventId: 'caos', order: ['p1', 'p1', 'p3'] }),
       ),
     ).toBe(true)
 
-    const after = reduce(
-      state,
-      { type: 'start-final-event', payload: { eventId: 'caos', order: ['p3', 'p1', 'p2'] } },
-      'p1',
-    ) as CucupolyState
+    const after = startEvent(state, {
+      eventId: 'caos',
+      order: ['p3', 'p1', 'p2'],
+    }) as CucupolyState
 
     // p1 recibe la posición de p3 (Impuesto), p2 la de p1 y p3 la de p2.
     expect(after.positions.p1).toBe(4)
@@ -533,8 +540,264 @@ describe('eventos finales: caos desde la ronda 12', () => {
     expect(after.positions.p3).toBe(0)
     expect(after.money).toEqual(money)
     expect(after.phase).toBe('waiting-roll')
-    expect(after.finalEvent).toEqual({ id: 'caos', startRound: 12 })
+    expect(after.activeEvent).toEqual({
+      id: 'caos',
+      startRound: FINAL_PHASE_START_ROUND,
+      endRound: FINAL_PHASE_START_ROUND,
+    })
+    expect(after.finalEvent).toEqual({ id: 'caos', startRound: FINAL_PHASE_START_ROUND })
     expect(after.notices.some((notice) => notice.text.includes('Caos:'))).toBe(true)
+  })
+})
+
+describe('planificador: partida de 4 jugadores y 200 rondas', () => {
+  it('nunca solapa eventos, los alinea por ronda y respeta pausas de 4 a 8', () => {
+    const players = FOUR
+    let state = fresh(players, 99)
+    // Todas las propiedades tienen dueño: las subastas quedan fuera del sorteo
+    // y la simulación no necesita resolver ofertas.
+    for (const tile of BOARD) {
+      if (tile.price !== undefined) state.owners[tile.index] = 'p1'
+    }
+
+    const started: Array<{
+      id: GameEventId
+      startRound: number
+      endRound: number
+      gapRounds: number
+    }> = []
+    const issues: string[] = []
+    let initialTransitions = 0
+    let seenRound = 0
+    const turnBase = players.length
+    const maxSteps = 200 * turnBase + 120
+
+    for (let step = 0; step < maxSteps && state.roundNumber <= 200; step += 1) {
+      if (state.phase === 'event') {
+        if (state.activeEvent !== null) {
+          issues.push(`evento activo al abrir el sorteo de la ronda ${state.roundNumber}`)
+          break
+        }
+        if (state.turnNumber !== (state.roundNumber - 1) * turnBase) {
+          issues.push(`evento fuera del primer turno de la ronda ${state.roundNumber}`)
+        }
+
+        const initialRound =
+          state.initialEvent === null && state.roundNumber === 2
+        let pool = eventPoolForRound(state.roundNumber, state.owners, state.lastEventId)
+        if (initialRound) {
+          pool = pool.filter((id) => INITIAL_EVENT_POOL.includes(id as never))
+        }
+        if (pool.length === 0) {
+          issues.push(`pool vacío en la ronda ${state.roundNumber}`)
+          break
+        }
+
+        const eventId = pool[0]
+        const gapRounds =
+          EVENT_GAP_MIN_ROUNDS +
+          (started.length % (EVENT_GAP_MAX_ROUNDS - EVENT_GAP_MIN_ROUNDS + 1))
+        const payload: Record<string, unknown> = { eventId, gapRounds }
+        if (isAuctionEvent(eventId)) {
+          payload.tileId = freeAuctionTiles(state.owners)[0]
+        }
+        if (eventId === 'caos') {
+          payload.order = state.order.filter((id) => !state.bankrupt.includes(id))
+        }
+
+        const beforeInitial = state.initialEvent
+        const result = reduce(state, { type: 'start-event', payload }, state.order[0])
+        if (isGameError(result)) {
+          issues.push(result.error)
+          break
+        }
+        state = result
+        if (beforeInitial === null && state.initialEvent !== null) {
+          initialTransitions += 1
+          if (state.roundNumber !== 2) issues.push('evento inicial fuera de la ronda 2')
+        }
+
+        const active = state.activeEvent
+        if (!active || active.id !== eventId) {
+          issues.push('el evento no quedó activo')
+          break
+        }
+        if (active.startRound !== state.roundNumber) {
+          issues.push(`inicio incorrecto en la ronda ${state.roundNumber}`)
+        }
+        const duration = eventDurationRounds(eventId)
+        if (active.endRound !== state.roundNumber + duration - 1) {
+          issues.push(`duración incorrecta para ${eventId}`)
+        }
+        if (state.nextEventRound !== active.endRound + 1 + gapRounds) {
+          issues.push(`pausa incorrecta tras ${eventId}`)
+        }
+        started.push({
+          id: eventId,
+          startRound: state.roundNumber,
+          endRound: active.endRound,
+          gapRounds,
+        })
+        continue
+      }
+
+      if (state.phase === 'auction') {
+        issues.push(`subasta inesperada en la ronda ${state.roundNumber}`)
+        break
+      }
+
+      if (state.roundNumber !== seenRound) {
+        seenRound = state.roundNumber
+        const current = started[started.length - 1]
+        if (current) {
+          if (
+            state.roundNumber > current.startRound &&
+            state.roundNumber <= current.endRound &&
+            state.activeEvent?.id !== current.id
+          ) {
+            issues.push(`el evento ${current.id} no cubre la ronda ${state.roundNumber}`)
+          }
+          if (state.roundNumber === current.endRound + 1 && state.activeEvent !== null) {
+            issues.push(
+              `el evento ${current.id} no terminó tras la ronda ${current.endRound}`,
+            )
+          }
+        }
+      }
+
+      state = passTurn(state, state.turnOrder[state.currentIndex])
+    }
+
+    expect(issues).toEqual([])
+    expect(started.length).toBeGreaterThan(20)
+    expect(started[0]?.startRound).toBe(2)
+    expect(INITIAL_EVENT_POOL.includes(started[0]?.id as never)).toBe(true)
+    expect(initialTransitions).toBe(1)
+    expect(state.initialEvent).toBe(started[0]?.id)
+
+    // Un solo evento activo cada vez y duración exacta del catálogo.
+    for (const event of started) {
+      expect(event.endRound - event.startRound + 1).toBe(eventDurationRounds(event.id))
+    }
+
+    // Entre eventos hay entre 4 y 8 rondas libres.
+    for (let i = 1; i < started.length; i += 1) {
+      const freeRounds = started[i].startRound - (started[i - 1].endRound + 1)
+      expect(freeRounds).toBeGreaterThanOrEqual(EVENT_GAP_MIN_ROUNDS)
+      expect(freeRounds).toBeLessThanOrEqual(EVENT_GAP_MAX_ROUNDS)
+    }
+
+    // Nada final antes de la ronda 40; desde ahí, solo finales.
+    expect(
+      started.filter((event) => event.startRound < FINAL_PHASE_START_ROUND).some((event) =>
+        isFinalEventId(event.id),
+      ),
+    ).toBe(false)
+    expect(
+      started
+        .filter((event) => event.startRound >= FINAL_PHASE_START_ROUND)
+        .every((event) => isFinalEventId(event.id)),
+    ).toBe(true)
+    expect(
+      started.some(
+        (event) =>
+          event.startRound >= FINAL_PHASE_START_ROUND && isFinalEventId(event.id),
+      ),
+    ).toBe(true)
+  })
+})
+
+describe('evento de dados y Sorpresa en la misma ronda', () => {
+  it('todos los jugadores de una ronda tiran 3 dados', () => {
+    const state = fresh(FOUR, 99)
+    state.activeEvent = activeEventFor('dados_tres', 1)
+
+    for (const id of state.turnOrder) {
+      const turn: CucupolyState = {
+        ...state,
+        phase: 'waiting-roll',
+        currentIndex: state.turnOrder.indexOf(id),
+        seed: seedForDie(2),
+      }
+      const after = reduce(turn, { type: 'roll' }, id) as CucupolyState
+      expect(getDiceCount(turn)).toBe(3)
+      expect(lastRollValues(after, state.names[id])).toHaveLength(3)
+    }
+  })
+
+  it('una Sorpresa de dados no puede empezar otro evento dentro de la ronda', () => {
+    const state = fresh(TWO, 99)
+    state.activeEvent = activeEventFor('dados_tres', 1)
+    const seed = seedForChance(3, 2) // Vamos rápido
+    const { total } = rollOutcome(seed, 3)
+    state.seed = seed
+    state.phase = 'waiting-roll'
+    state.currentIndex = 0
+    state.positions.p1 = (9 - total + 48) % 48
+
+    const after = reduce(state, { type: 'roll' }, 'p1') as CucupolyState
+    expect(after.roundNumber).toBe(1)
+    expect(after.activeEvent?.id).toBe('dados_tres')
+    expect(after.scheduledEventId).toBeNull()
+    expect(after.log.some((entry) => entry.text.includes('descartado'))).toBe(true)
+    expect(getDiceCount(after)).toBe(3)
+
+    // El siguiente jugador de la misma ronda también tira 3 dados.
+    const p2Turn: CucupolyState = {
+      ...after,
+      phase: 'waiting-roll',
+      currentIndex: 1,
+      seed: seedForDie(2),
+    }
+    expect(getDiceCount(p2Turn)).toBe(3)
+    const next = reduce(p2Turn, { type: 'roll' }, 'p2') as CucupolyState
+    expect(lastRollValues(next, 'Beto')).toHaveLength(3)
+  })
+
+  it('descarta un evento de dados si la próxima ventana ya es final', () => {
+    const state = fresh(TWO, 99)
+    state.initialEvent = 'impulso_economico'
+    state.roundNumber = FINAL_PHASE_START_ROUND - 2
+    state.nextEventRound = FINAL_PHASE_START_ROUND
+    state.phase = 'waiting-roll'
+
+    const result = requestDiceEvent(state, 'dados_tres')
+    expect(result.ok).toBe(false)
+    expect(state.scheduledEventId).toBeNull()
+  })
+
+  it('sin evento activo la Sorpresa queda programada para la próxima ventana', () => {
+    const state = fresh(TWO, 99)
+    // El inicial ya ocurrió; la próxima ventana será la ronda 5.
+    state.initialEvent = 'impulso_economico'
+    state.nextEventRound = 5
+    const seed = seedForChance(2, 2) // Vamos rápido con 2 dados
+    aimAtChance(state, 'p1', seed)
+
+    const after = reduce(state, { type: 'roll' }, 'p1') as CucupolyState
+    expect(after.activeEvent).toBeNull()
+    expect(after.scheduledEventId).toBe('dados_tres')
+
+    // No empieza a mitad de ronda: espera a la ventana programada.
+    let next = after
+    while (next.roundNumber < 5) {
+      next = passTurn(next, next.turnOrder[next.currentIndex])
+    }
+    expect(next.roundNumber).toBe(5)
+    expect(next.phase).toBe('event')
+    expect(isGameError(reduce(next, { type: 'roll' }, 'p1'))).toBe(true)
+
+    const started = reduce(
+      next,
+      { type: 'start-event', payload: { eventId: 'dados_tres', gapRounds: 4 } },
+      'p1',
+    ) as CucupolyState
+    expect(started.activeEvent).toMatchObject({
+      id: 'dados_tres',
+      startRound: 5,
+      endRound: 5,
+    })
+    expect(started.scheduledEventId).toBeNull()
   })
 })
 
@@ -583,7 +846,7 @@ describe('subastas de evento', () => {
   it('elige una propiedad sin dueño y no subasta casillas ocupadas', () => {
     const free = freeAuctionTiles({})
     expect(free.length).toBeGreaterThan(1)
-    expect(drawableEvents({})).toEqual([...INITIAL_EVENT_POOL])
+    expect(drawableEvents({})).toEqual([...NORMAL_EVENT_POOL])
 
     const allOwned: Record<number, string> = {}
     for (const tile of BOARD) {
@@ -591,7 +854,12 @@ describe('subastas de evento', () => {
     }
     expect(freeAuctionTiles(allOwned)).toEqual([])
     // Sin propiedades libres, las subastas salen del sorteo.
-    expect(drawableEvents(allOwned)).toEqual(['impulso_economico', 'semana_descuentos'])
+    expect(drawableEvents(allOwned)).toEqual([
+      'impulso_economico',
+      'semana_descuentos',
+      'dados_uno',
+      'dados_tres',
+    ])
 
     const state = reachRoundTwo()
     state.owners[free[0]] = 'p2'
@@ -891,10 +1159,11 @@ describe('habilidad Ser. Luz: Apagón', () => {
     state.turnNumber = 1
     state.currentIndex = 1
     state.seed = seedForDie(1)
-    state.diceModifier = { from: 0, until: 2, dice: 1 }
+    state.activeEvent = activeEventFor('dados_uno', 1)
     state.positions.p2 = 0 // con un dado de 1 cae en Fortaleza ($60)
     // El evento inicial ya ocurrió: aquí solo se prueba la habilidad.
     state.initialEvent = 'impulso_economico'
+    state.nextEventRound = 9
 
     const after = reduce(state, { type: 'roll' }, 'p2') as CucupolyState
     expect(after.phase).toBe('waiting-roll')
@@ -1003,7 +1272,7 @@ describe('habilidad de ruta de busetas', () => {
     state.currentIndex = 0
     state.seed = seedForDie(1)
     state.positions.p1 = BUS_TILES[0] - 1 // con un dado de 1 cae en la buseta 6
-    state.diceModifier = { from: 0, until: 1, dice: 1 }
+    state.activeEvent = activeEventFor('dados_uno', 1)
 
     const after = reduce(state, { type: 'roll' }, 'p1') as CucupolyState
     expect(after.positions.p1).toBe(BUS_TILES[0])
@@ -1336,47 +1605,79 @@ describe('evento: mesa de 21', () => {
 })
 
 describe('evento: vamos despacio (1 dado)', () => {
-  it('la siguiente ronda se tira con un solo dado', () => {
-    const state = fresh()
+  it('la Sorpresa lo programa para la próxima ventana y todos tiran 1 dado', () => {
+    let state = fresh()
+    // El inicial ya ocurrió; la próxima ventana será la ronda 5.
+    state.initialEvent = 'impulso_economico'
+    state.nextEventRound = 5
     const seed = seedForChance(2, 1)
     aimAtChance(state, 'p1', seed)
 
-    const after = reduce(state, { type: 'roll' }, 'p1') as CucupolyState
-    expect(after.diceModifier).toEqual({ from: 1, until: 3, dice: 1 })
+    state = reduce(state, { type: 'roll' }, 'p1') as CucupolyState
+    expect(state.activeEvent).toBeNull()
+    expect(state.scheduledEventId).toBe('dados_uno')
 
-    // Coloca a p2 para que caiga en Fortaleza (sin dueño) y no se cierre el turno.
-    const total = rollOutcome(after.seed, 1).total
-    after.positions.p2 = (1 - total + 48) % 48
-    const next = reduce(after, { type: 'roll' }, 'p2') as CucupolyState
-    expect(next.dice!.values).toHaveLength(1)
-    expect(next.dice!.total).toBe(next.dice!.values[0])
+    // No empieza a mitad de ronda: espera a la ventana programada.
+    while (state.roundNumber < 5) {
+      state = passTurn(state, state.turnOrder[state.currentIndex])
+    }
+    expect(state.roundNumber).toBe(5)
+    expect(state.phase).toBe('event')
+    state = reduce(
+      state,
+      { type: 'start-event', payload: { eventId: 'dados_uno', gapRounds: 4 } },
+      'p1',
+    ) as CucupolyState
+    expect(state.activeEvent).toMatchObject({
+      id: 'dados_uno',
+      startRound: 5,
+      endRound: 5,
+    })
+    expect(getDiceCount(state)).toBe(1)
+
+    const rolled = reduce(state, { type: 'roll' }, 'p1') as CucupolyState
+    expect(lastRollValues(rolled, 'Ana')).toHaveLength(1)
   })
 })
 
 describe('evento: vamos rápido (3 dados)', () => {
-  it('la siguiente ronda se tira con tres dados', () => {
-    const state = fresh()
+  it('la Sorpresa lo programa para la próxima ventana y todos tiran 3 dados', () => {
+    let state = fresh()
+    state.initialEvent = 'impulso_economico'
+    state.nextEventRound = 5
     const seed = seedForChance(2, 2)
     aimAtChance(state, 'p1', seed)
 
-    const after = reduce(state, { type: 'roll' }, 'p1') as CucupolyState
-    expect(after.diceModifier).toEqual({ from: 1, until: 3, dice: 3 })
+    state = reduce(state, { type: 'roll' }, 'p1') as CucupolyState
+    expect(state.activeEvent).toBeNull()
+    expect(state.scheduledEventId).toBe('dados_tres')
 
-    // Coloca a p2 para que caiga en Fortaleza (sin dueño) y no se cierre el turno.
-    const total = rollOutcome(after.seed, 3).total
-    after.positions.p2 = (1 - total + 48) % 48
-    const next = reduce(after, { type: 'roll' }, 'p2') as CucupolyState
-    expect(next.dice!.values).toHaveLength(3)
-    expect(next.dice!.total).toBe(
-      next.dice!.values.reduce((sum, value) => sum + value, 0),
-    )
+    while (state.roundNumber < 5) {
+      state = passTurn(state, state.turnOrder[state.currentIndex])
+    }
+    expect(state.roundNumber).toBe(5)
+    expect(state.phase).toBe('event')
+    state = reduce(
+      state,
+      { type: 'start-event', payload: { eventId: 'dados_tres', gapRounds: 4 } },
+      'p1',
+    ) as CucupolyState
+    expect(state.activeEvent).toMatchObject({
+      id: 'dados_tres',
+      startRound: 5,
+      endRound: 5,
+    })
+    expect(getDiceCount(state)).toBe(3)
+
+    const rolled = reduce(state, { type: 'roll' }, 'p1') as CucupolyState
+    expect(lastRollValues(rolled, 'Ana')).toHaveLength(3)
   })
 })
 
 describe('movimiento con 1 y 3 dados', () => {
   it('avanza la ficha la suma exacta de los dados', () => {
     const state = fresh()
-    state.diceModifier = { from: 0, until: 1, dice: 1 }
+    state.activeEvent = activeEventFor('dados_uno', 1)
     state.seed = seedForDie(4)
     state.currentIndex = 0
     state.positions.p1 = 10
@@ -1388,7 +1689,7 @@ describe('movimiento con 1 y 3 dados', () => {
 
   it('con 3 dados avanza entre 3 y 18 casillas', () => {
     const state = fresh()
-    state.diceModifier = { from: 0, until: 1, dice: 3 }
+    state.activeEvent = activeEventFor('dados_tres', 1)
     state.currentIndex = 0
     // Cae en Fortaleza (sin dueño) para conservar los dados en la decisión.
     const { total } = rollOutcome(state.seed, 3)
@@ -1591,7 +1892,7 @@ describe('construcción de casas y hotel', () => {
     state.currentIndex = 0
     state.phase = 'waiting-roll'
     state.seed = seedForDie(1)
-    state.diceModifier = { from: 0, until: 1, dice: 1 }
+    state.activeEvent = activeEventFor('dados_uno', 1)
 
     const expected = rentFor(state, 1, 1)
     expect(expected).toBe(Math.round((BOARD[1].price ?? 0) * 1.5))
@@ -1614,7 +1915,7 @@ describe('avisos de pagos entre jugadores', () => {
     state.currentIndex = 0
     state.phase = 'waiting-roll'
     state.seed = seedForDie(1)
-    state.diceModifier = { from: 0, until: 1, dice: 1 }
+    state.activeEvent = activeEventFor('dados_uno', 1)
 
     const after = reduce(state, { type: 'roll' }, 'p1') as CucupolyState
     const notice = after.notices.find((entry) => entry.kind === 'money')
@@ -1646,8 +1947,10 @@ describe('avisos de pagos entre jugadores', () => {
     expect(notice?.text).toContain('intercambio')
   })
 
-  it('avisa el modificador de dados con causa y efecto', () => {
+  it('avisa el evento de dados programado con causa y efecto', () => {
     const state = fresh()
+    state.initialEvent = 'impulso_economico'
+    state.nextEventRound = 5
     const seed = seedForChance(2, 1) // Vamos despacio: 1 dado
     aimAtChance(state, 'p1', seed)
 
@@ -1657,7 +1960,8 @@ describe('avisos de pagos entre jugadores', () => {
         (entry) =>
           entry.kind === 'rule' &&
           entry.text.includes('1 dado') &&
-          entry.text.includes('Vamos despacio'),
+          entry.text.includes('Vamos despacio') &&
+          entry.text.includes('ronda 5'),
       ),
     ).toBe(true)
   })
@@ -1675,7 +1979,7 @@ describe('bancarrota', () => {
     state.currentIndex = 0
     state.phase = 'waiting-roll'
     state.seed = seedForDie(1) // cae en Fortaleza (1)
-    state.diceModifier = { from: 0, until: 1, dice: 1 }
+    state.activeEvent = activeEventFor('dados_uno', 1)
 
     const after = reduce(state, { type: 'roll' }, 'p1') as CucupolyState
 
@@ -1700,7 +2004,7 @@ describe('bancarrota', () => {
     state.currentIndex = 0
     state.phase = 'waiting-roll'
     state.seed = seedForDie(1) // cae en Impuesto (4), que cobra 50
-    state.diceModifier = { from: 0, until: 1, dice: 1 }
+    state.activeEvent = activeEventFor('dados_uno', 1)
 
     const after = reduce(state, { type: 'roll' }, 'p1') as CucupolyState
 
@@ -1721,7 +2025,7 @@ describe('bancarrota', () => {
     state.currentIndex = 0
     state.phase = 'waiting-roll'
     state.seed = seedForDie(1) // Impuesto (4)
-    state.diceModifier = { from: 0, until: 1, dice: 1 }
+    state.activeEvent = activeEventFor('dados_uno', 1)
 
     let after = reduce(state, { type: 'roll' }, 'p1') as CucupolyState
 

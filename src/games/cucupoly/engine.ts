@@ -10,23 +10,35 @@ import {
 import { RULES } from './rules.config'
 import {
   AUCTION_OPEN_IDLE_TICKS,
+  DICE_EVENTS,
   FINAL_EVENTS,
   INITIAL_EVENT_ROUND,
   MIN_RAISE,
   auctionModeFor,
-  finalPriceMultiplier,
+  diceCountForEvent,
+  eventPriceMultiplier,
   finalTaxFor,
   freeAuctionTiles,
-  isFinalEventActive,
+  isAuctionEvent,
+  isDiceEventId,
   isFinalEventId,
-  isFinalEventRound,
-  isInitialEventId,
+  isGameEventId,
   purchasePriceFor,
+  type ActiveEvent,
   type AuctionMode,
-  type FinalEventId,
+  type DiceEventId,
   type FinalEventState,
+  type GameEventId,
   type InitialEventId,
 } from './events'
+import {
+  EVENT_GAP_MIN_ROUNDS,
+  beginEvent,
+  closeFinishedEvent,
+  initialEventSchedule,
+  isEventDue,
+  requestDiceEvent,
+} from './eventScheduler'
 import {
   pushEventNotice,
   pushMoneyNotice,
@@ -158,11 +170,21 @@ export type CucupolyState = {
   turnNumber: number
   /** Ronda actual (1-based). Sube cuando el turno vuelve a empezar. */
   roundNumber: number
+  /** Evento activo; es la única fuente de verdad del planificador. */
+  activeEvent: ActiveEvent | null
+  /** Ronda en la que puede empezar el próximo evento. */
+  nextEventRound: number
+  /** Último evento iniciado: evita repetir el final anterior. */
+  lastEventId: GameEventId | null
+  /** Evento de dados elegido por una Sorpresa para la próxima ventana. */
+  scheduledEventId: GameEventId | null
   /** Evento inicial elegido por el anfitrión; null hasta que arranca. */
   initialEvent: InitialEventId | null
-  /** Sube en 1 al anunciar un evento; los clientes lo usan para animar una vez. */
+  /** Sube en 1 al anunciar el evento inicial; los clientes lo animan una vez. */
+  initialEventSeq: number
+  /** Sube en 1 al anunciar cualquier evento. */
   eventSeq: number
-  /** Evento final vigente desde la ronda 12; null antes de la fase final. */
+  /** Último evento final vigente; null antes de la fase final. */
   finalEvent: FinalEventState | null
   /** Sube en 1 al anunciar un evento final. */
   finalEventSeq: number
@@ -177,7 +199,6 @@ export type CucupolyState = {
   bankrupt: string[]
   abilities: Record<number, AbilityState>
   dice: { values: number[]; total: number } | null
-  diceModifier: { from: number; until: number; dice: 1 | 3 } | null
   pendingBuy: number | null
   pendingBus: number | null
   auction: AuctionState | null
@@ -303,9 +324,9 @@ export function rentFor(state: CucupolyState, tileId: number, diceTotal: number)
   if (isWaterActive(state, owner)) {
     rent = Math.round(rent * (1 + RULES.waterRentBonus))
   }
-  // Misma fuente que compras y construcción: la inflación final se aplica
-  // encima de cualquier bono para que HUD y cobro coincidan.
-  return Math.round(rent * finalPriceMultiplier(state.finalEvent, state.roundNumber))
+  // Misma fuente que compras y construcción: la inflación del evento activo se
+  // aplica encima de cualquier bono para que HUD y cobro coincidan.
+  return Math.round(rent * eventPriceMultiplier(state.activeEvent, state.roundNumber))
 }
 
 function cloneState(source: CucupolyState): CucupolyState {
@@ -328,6 +349,7 @@ function cloneState(source: CucupolyState): CucupolyState {
         }
       : null,
     finalEvent: source.finalEvent ? { ...source.finalEvent } : null,
+    activeEvent: source.activeEvent ? { ...source.activeEvent } : null,
     owners: { ...source.owners },
     buildings: { ...source.buildings },
     positions: { ...source.positions },
@@ -337,7 +359,6 @@ function cloneState(source: CucupolyState): CucupolyState {
     bankrupt: [...source.bankrupt],
     abilities,
     dice: source.dice ? { ...source.dice, values: [...source.dice.values] } : null,
-    diceModifier: source.diceModifier ? { ...source.diceModifier } : null,
     auction: source.auction
       ? {
           ...source.auction,
@@ -409,7 +430,8 @@ function finishGame(state: CucupolyState, remaining: readonly string[]): void {
   state.phase = 'finished'
   state.winner = remaining[0] ?? null
   state.dice = null
-  state.diceModifier = null
+  state.activeEvent = null
+  state.scheduledEventId = null
   state.turnOrderState = null
   state.pendingBuy = null
   state.pendingBus = null
@@ -460,35 +482,37 @@ function endTurn(state: CucupolyState): void {
   // orden relativo y el índice se recalcula sobre el array compacto.
   compactTurnOrder(state)
 
-  // Impuestos altos: al empezar cada ronda del evento, antes de cualquier
-  // turno. La ronda 12 los cobra al aplicar el evento (ver el handler).
-  if (
-    roundChanged &&
-    state.finalEvent !== null &&
-    isFinalEventActive(state.finalEvent, state.roundNumber) &&
-    FINAL_EVENTS[state.finalEvent.id].kind === 'taxes'
-  ) {
-    applyFinalTaxes(state)
-    if (isGameOver(state)) return
-  }
-
-  // Desde la ronda 12, cada 3 rondas el anfitrión sortea fuera del reducer y
-  // aplica el evento final; hasta entonces nadie puede tirar.
-  if (
-    isFinalEventRound(state.roundNumber) &&
-    state.finalEvent?.startRound !== state.roundNumber
-  ) {
-    state.phase = 'final-event'
+  if (!roundChanged) {
+    state.phase = 'waiting-roll'
     return
   }
 
-  // Al empezar la ronda 2 se abre la fase de evento. El anfitrión sortea el
-  // evento fuera del reducer y lo aplica con `start-initial-event`.
-  state.phase =
-    state.roundNumber === INITIAL_EVENT_ROUND && state.initialEvent === null
-      ? 'event'
-      : 'waiting-roll'
-  if (state.phase === 'waiting-roll') announceDiceModifier(state)
+  // Único enganche del planificador: fin de la ronda anterior e inicio de la
+  // nueva. Primero se cierra el evento que terminó; después se aplican sus
+  // efectos de ronda y, si toca, se abre el sorteo del próximo evento.
+  closeFinishedEvent(state)
+  applyRoundStartEventEffects(state)
+  if (isGameOver(state)) return
+
+  if (isEventDue(state)) {
+    state.phase = 'event'
+    return
+  }
+
+  state.phase = 'waiting-roll'
+  announceDiceEvent(state)
+}
+
+/** Efectos que se repiten al inicio de cada ronda de un evento activo. */
+function applyRoundStartEventEffects(state: CucupolyState): void {
+  const event = state.activeEvent
+  if (!event) return
+
+  if (event.id === 'impuestos_altos') {
+    applyFinalTaxes(state)
+    if (isGameOver(state)) return
+  }
+  announceDiceEvent(state)
 }
 
 /** Cobra el 15% del efectivo de cada activo al banco. Deudas reales. */
@@ -509,20 +533,17 @@ function applyFinalTaxes(state: CucupolyState): void {
   }
 }
 
-/** Recuerda a todos por qué este turno se tira con 1 o 3 dados. */
-function announceDiceModifier(state: CucupolyState): void {
-  const modifier = state.diceModifier
-  if (!modifier) return
-  if (state.turnNumber < modifier.from || state.turnNumber >= modifier.until) return
+/** Anuncia una sola vez por ronda el evento de dados activo. */
+function announceDiceEvent(state: CucupolyState): void {
+  const event = state.activeEvent
+  if (!event || !isDiceEventId(event.id)) return
 
-  const playerId = currentId(state)
-  if (state.inJail[playerId]) return
-  const dice = modifier.dice
+  const definition = DICE_EVENTS[event.id]
   ruleNotice(
     state,
-    `Turno de ${state.names[playerId]}: lanza ${dice} ${
-      dice === 1 ? 'dado' : 'dados'
-    } en vez de 2 por Sorpresa: ${dice === 1 ? 'Vamos despacio' : 'Vamos rápido'}.`,
+    `Evento de dados: ${definition.name} — durante la ronda ${state.roundNumber} se ${
+      definition.dice === 1 ? 'lanza 1 dado' : 'lanzan 3 dados'
+    } en vez de 2.`,
   )
 }
 
@@ -635,12 +656,9 @@ function credit(state: CucupolyState, to: string, amount: number): void {
   state.money[to] = (state.money[to] ?? 0) + amount
 }
 
-function diceCount(state: CucupolyState): number {
-  const modifier = state.diceModifier
-  if (modifier && state.turnNumber >= modifier.from && state.turnNumber < modifier.until) {
-    return modifier.dice
-  }
-  return 2
+/** Única fuente del número de dados de una tirada; lee el evento activo. */
+export function getDiceCount(state: CucupolyState): number {
+  return diceCountForEvent(state.activeEvent)
 }
 
 function nextBus(tileId: number): number {
@@ -658,12 +676,6 @@ function readString(payload: unknown, key: string): string | null {
   if (typeof payload !== 'object' || payload === null) return null
   const value = (payload as Record<string, unknown>)[key]
   return typeof value === 'string' ? value : null
-}
-
-function readEventId(payload: unknown): InitialEventId | null {
-  if (typeof payload !== 'object' || payload === null) return null
-  const value = (payload as Record<string, unknown>).eventId
-  return isInitialEventId(value) ? value : null
 }
 
 function readTiles(value: unknown): number[] | null {
@@ -714,7 +726,9 @@ export function init(players: Player[], seed: number): CucupolyState {
     currentIndex: 0,
     turnNumber: 0,
     roundNumber: 1,
+    ...initialEventSchedule(),
     initialEvent: null,
+    initialEventSeq: 0,
     eventSeq: 0,
     finalEvent: null,
     finalEventSeq: 0,
@@ -728,7 +742,6 @@ export function init(players: Player[], seed: number): CucupolyState {
     bankrupt: [],
     abilities,
     dice: null,
-    diceModifier: null,
     pendingBuy: null,
     pendingBus: null,
     auction: null,
@@ -780,10 +793,10 @@ export function reduce(
       return handleResolveSecretAuction(state, playerId, action.payload)
     case 'open-initial-auction':
       return handleOpenInitialAuction(state, playerId)
+    case 'start-event':
     case 'start-initial-event':
-      return handleStartInitialEvent(state, playerId, action.payload)
     case 'start-final-event':
-      return handleStartFinalEvent(state, playerId, action.payload)
+      return handleStartEvent(state, playerId, action.payload)
     case 'pay-bail':
       return handlePayBail(state, playerId)
     case 'activate-ability':
@@ -959,7 +972,7 @@ function handleRoll(state: CucupolyState, playerId: string): CucupolyState | { e
     return state
   }
 
-  const count = diceCount(state)
+  const count = getDiceCount(state)
   const values: number[] = []
   for (let i = 0; i < count; i += 1) values.push(randomInt(state, 1, 6))
   const total = values.reduce((sum, value) => sum + value, 0)
@@ -1100,21 +1113,31 @@ function drawChance(state: CucupolyState): void {
   const event = CHANCE_EVENTS[randomInt(state, 0, CHANCE_EVENTS.length - 1)]
 
   if (event === 'slow' || event === 'fast') {
-    const rounds = activeIds(state).length
-    const from = state.turnNumber + 1
-    state.diceModifier = { from, until: from + rounds, dice: event === 'slow' ? 1 : 3 }
-    pushLog(
-      state,
-      event === 'slow'
-        ? 'Sorpresa: Vamos despacio. La próxima ronda se tira 1 dado.'
-        : 'Sorpresa: Vamos rápido. La próxima ronda se tiran 3 dados.',
-    )
-    ruleNotice(
-      state,
-      event === 'slow'
-        ? 'Sorpresa: Vamos despacio — durante la próxima ronda se lanza 1 dado en vez de 2.'
-        : 'Sorpresa: Vamos rápido — durante la próxima ronda se lanzan 3 dados en vez de 2.',
-    )
+    const diceEventId: DiceEventId = event === 'slow' ? 'dados_uno' : 'dados_tres'
+    const definition = DICE_EVENTS[diceEventId]
+    const result = requestDiceEvent(state, diceEventId)
+
+    if (result.ok) {
+      pushLog(
+        state,
+        `Sorpresa: ${definition.name}. Se jugará como evento al inicio de la ronda ${result.round}.`,
+      )
+      ruleNotice(
+        state,
+        `Sorpresa: ${definition.name} — evento de dados programado para la ronda ${result.round}; todos tirarán ${
+          definition.dice === 1 ? '1 dado' : '3 dados'
+        } en esa ronda completa.`,
+      )
+    } else {
+      pushLog(
+        state,
+        `Sorpresa: ${definition.name} descartado (${result.reason}).`,
+      )
+      ruleNotice(
+        state,
+        `Sorpresa: ${definition.name} no se aplica: ${result.reason}`,
+      )
+    }
     endTurn(state)
     return
   }
@@ -1146,12 +1169,7 @@ function handleBuy(state: CucupolyState, playerId: string): CucupolyState | { er
   if (isBlackoutActive(state)) return { error: 'Apagón: nadie puede comprar propiedades.' }
 
   const tile = BOARD[state.pendingBuy]
-  const price = purchasePriceFor(
-    tile.price ?? 0,
-    state.initialEvent,
-    state.roundNumber,
-    state.finalEvent,
-  )
+  const price = purchasePriceFor(tile.price ?? 0, state.activeEvent, state.roundNumber)
   if (!spend(state, playerId, price)) return { error: 'No tienes dinero suficiente.' }
 
   state.owners[tile.index] = playerId
@@ -1195,7 +1213,7 @@ function handleBuild(
 
   const cost = buildCostFor(
     propertyId,
-    finalPriceMultiplier(state.finalEvent, state.roundNumber),
+    eventPriceMultiplier(state.activeEvent, state.roundNumber),
   )
   if (cost === null) return { error: 'Esa propiedad no permite edificios.' }
   if (!spend(state, playerId, cost)) {
@@ -1212,91 +1230,10 @@ function handleBuild(
   return state
 }
 
-function handleStartInitialEvent(
-  state: CucupolyState,
-  playerId: string,
-  payload: unknown,
-): CucupolyState | { error: string } {
-  if (playerId !== state.order[0]) {
-    return { error: 'Solo el anfitrión puede sortear el evento inicial.' }
-  }
-  if (state.phase !== 'event') return { error: 'No es el momento del evento inicial.' }
-  if (state.roundNumber !== INITIAL_EVENT_ROUND) {
-    return { error: 'El evento inicial solo ocurre al empezar la ronda 2.' }
-  }
-  if (state.initialEvent !== null) return { error: 'El evento inicial ya ocurrió.' }
-
-  const eventId = readEventId(payload)
-  if (!eventId) return { error: 'Evento inicial no válido.' }
-
-  const mode = auctionModeFor(eventId)
-  if (mode) {
-    const tileId = readInt(payload, 'tileId')
-    if (tileId === null) return { error: 'Falta la propiedad de la subasta.' }
-    if (!freeAuctionTiles(state.owners).includes(tileId)) {
-      return { error: 'Esa propiedad ya tiene dueño.' }
-    }
-
-    state.initialEvent = eventId
-    state.eventSeq += 1
-    state.auction = {
-      tileId,
-      mode,
-      pending: activeIds(state),
-      registered: [],
-      leader: null,
-      leaderBid: 0,
-      countdown: 0,
-    }
-    pushLog(
-      state,
-      `Evento inicial: ${AUCTION_NAMES[mode]} por ${BOARD[tileId].name}.`,
-    )
-    eventNotice(
-      state,
-      `Evento inicial: ${AUCTION_NAMES[mode]} por ${BOARD[tileId].name} — ${
-        mode === 'sealed' ? 'todos ofertan a ciegas.' : 'gana la última puja.'
-      }`,
-    )
-    // La fase sigue en 'event': el anfitrión abre la subasta cuando el anuncio
-    // termina, con `open-initial-auction`.
-    return state
-  }
-
-  state.initialEvent = eventId
-  state.eventSeq += 1
-
-  if (eventId === 'impulso_economico') {
-    for (const id of activeIds(state)) {
-      credit(state, id, RULES.initialEventBoost)
-    }
-    pushLog(
-      state,
-      `Evento inicial: Impulso Económico. Todos los jugadores activos reciben $${RULES.initialEventBoost}.`,
-    )
-    eventNotice(
-      state,
-      `Evento inicial: Impulso Económico — todos los jugadores activos reciben $${RULES.initialEventBoost}.`,
-    )
-  } else {
-    pushLog(
-      state,
-      'Evento inicial: Semana de descuentos. Las propiedades estarán a mitad de precio en las rondas 3, 4 y 5.',
-    )
-    eventNotice(
-      state,
-      'Evento inicial: Semana de descuentos — las propiedades cuestan la mitad en las rondas 3, 4 y 5.',
-    )
-  }
-
-  state.phase = 'waiting-roll'
-  return state
-}
-
-function readFinalEventId(payload: unknown): FinalEventId | null {
+function readGameEventId(payload: unknown): GameEventId | null {
   if (typeof payload !== 'object' || payload === null) return null
   const value = (payload as Record<string, unknown>).eventId
-  return isFinalEventId(value) ? value : null
+  return isGameEventId(value) ? value : null
 }
 
 /** La permutación debe contener exactamente una vez a cada jugador activo. */
@@ -1314,65 +1251,134 @@ function readFinalOrder(payload: unknown, active: readonly string[]): string[] |
 }
 
 /**
- * Aplica el evento final sorteado por el anfitrión. El reducer sigue puro: la
- * semilla de la permutación del caos llega ya decidida en el payload.
+ * Único handler que inicia eventos. El planificador valida ronda, pool y
+ * exclusividad; este handler solo aplica el efecto concreto y deja el estado
+ * listo para que el turno siga (o para que abra la subasta).
  */
-function handleStartFinalEvent(
+function handleStartEvent(
   state: CucupolyState,
   playerId: string,
   payload: unknown,
 ): CucupolyState | { error: string } {
   if (playerId !== state.order[0]) {
-    return { error: 'Solo el anfitrión puede sortear el evento final.' }
+    return { error: 'Solo el anfitrión puede sortear el evento.' }
   }
-  if (state.phase !== 'final-event') {
-    return { error: 'No es el momento del evento final.' }
-  }
-  if (!isFinalEventRound(state.roundNumber)) {
-    return { error: 'Todavía no toca un evento final.' }
-  }
-  if (state.finalEvent?.startRound === state.roundNumber) {
-    return { error: 'El evento final de esta ronda ya ocurrió.' }
+  if (state.phase !== 'event' && state.phase !== 'final-event') {
+    return { error: 'No es el momento de un evento.' }
   }
 
-  const eventId = readFinalEventId(payload)
-  if (!eventId) return { error: 'Evento final no válido.' }
-  if (state.finalEvent?.id === eventId) {
-    return { error: 'El evento final no puede repetirse dos veces seguidas.' }
-  }
+  const eventId = readGameEventId(payload)
+  if (!eventId) return { error: 'Evento no válido.' }
 
-  const definition = FINAL_EVENTS[eventId]
   const active = activeIds(state)
-  const order = definition.kind === 'chaos' ? readFinalOrder(payload, active) : null
-  if (definition.kind === 'chaos' && !order) {
-    return { error: 'La permutación del caos no es válida.' }
+  let tileId: number | null = null
+  let chaosOrder: string[] | null = null
+
+  if (isAuctionEvent(eventId)) {
+    tileId = readInt(payload, 'tileId')
+    if (tileId === null) return { error: 'Falta la propiedad de la subasta.' }
+    if (!freeAuctionTiles(state.owners).includes(tileId)) {
+      return { error: 'Esa propiedad ya tiene dueño.' }
+    }
+  }
+  if (eventId === 'caos') {
+    chaosOrder = readFinalOrder(payload, active)
+    if (!chaosOrder) return { error: 'La permutación del caos no es válida.' }
   }
 
-  state.finalEvent = { id: eventId, startRound: state.roundNumber }
-  state.finalEventSeq += 1
+  const gap = readInt(payload, 'gapRounds')
+  const begun = beginEvent(state, eventId, gap ?? EVENT_GAP_MIN_ROUNDS)
+  if ('error' in begun) return begun
 
-  pushLog(state, `Evento final: ${definition.name}.`)
-  eventNotice(state, `Evento final: ${definition.name} — ${definition.description}`)
+  state.eventSeq += 1
+  if (
+    state.initialEvent === eventId &&
+    state.activeEvent?.startRound === INITIAL_EVENT_ROUND
+  ) {
+    state.initialEventSeq += 1
+  }
 
-  if (definition.kind === 'inflation') {
-    ruleNotice(
+  if (isAuctionEvent(eventId)) {
+    const mode = auctionModeFor(eventId as InitialEventId)
+    if (!mode || tileId === null) return { error: 'Subasta no válida.' }
+    state.auction = {
+      tileId,
+      mode,
+      pending: active,
+      registered: [],
+      leader: null,
+      leaderBid: 0,
+      countdown: 0,
+    }
+    pushLog(
       state,
-      'Inflación alta: compras, construcción y alquileres cuestan el doble durante 3 rondas.',
+      `Evento: ${AUCTION_NAMES[mode]} por ${BOARD[tileId].name}.`,
     )
-  } else if (definition.kind === 'taxes') {
-    // La ronda 12 del evento también cobra aquí, no solo en los cambios de ronda.
-    applyFinalTaxes(state)
-  } else if (definition.kind === 'chaos' && order) {
-    const before = { ...state.positions }
-    active.forEach((id, index) => {
-      state.positions[id] = before[order[index]] ?? 0
-    })
-    pushLog(state, 'Caos: los jugadores activos intercambian posiciones.')
+    eventNotice(
+      state,
+      `Evento: ${AUCTION_NAMES[mode]} por ${BOARD[tileId].name} — ${
+        mode === 'sealed' ? 'todos ofertan a ciegas.' : 'gana la última puja.'
+      }`,
+    )
+    // La fase sigue en 'event': el anfitrión abre la subasta cuando el anuncio
+    // termina, con `open-initial-auction`.
+    return state
+  }
+
+  if (eventId === 'impulso_economico') {
     for (const id of active) {
-      eventNotice(
+      credit(state, id, RULES.initialEventBoost)
+    }
+    pushLog(
+      state,
+      `Evento: Impulso Económico. Todos los jugadores activos reciben $${RULES.initialEventBoost}.`,
+    )
+    eventNotice(
+      state,
+      `Evento: Impulso Económico — todos los jugadores activos reciben $${RULES.initialEventBoost}.`,
+    )
+  } else if (eventId === 'semana_descuentos') {
+    pushLog(
+      state,
+      `Evento: Semana de descuentos hasta la ronda ${state.activeEvent?.endRound}.`,
+    )
+    eventNotice(
+      state,
+      `Evento: Semana de descuentos — las propiedades cuestan la mitad durante ${
+        state.activeEvent ? state.activeEvent.endRound - state.activeEvent.startRound + 1 : 3
+      } rondas completas.`,
+    )
+  } else if (isDiceEventId(eventId)) {
+    announceDiceEvent(state)
+  } else if (isFinalEventId(eventId)) {
+    state.finalEvent = { id: eventId, startRound: state.roundNumber }
+    state.finalEventSeq += 1
+
+    const definition = FINAL_EVENTS[eventId]
+    pushLog(state, `Evento final: ${definition.name}.`)
+    eventNotice(state, `Evento final: ${definition.name} — ${definition.description}`)
+
+    if (definition.kind === 'inflation') {
+      ruleNotice(
         state,
-        `Caos: ${state.names[id]} aparece en ${BOARD[state.positions[id]].name}.`,
+        'Inflación alta: compras, construcción y alquileres cuestan el doble durante 3 rondas.',
       )
+    } else if (definition.kind === 'taxes') {
+      // La primera ronda del evento también cobra; las siguientes lo hacen en
+      // `applyRoundStartEventEffects`.
+      applyFinalTaxes(state)
+    } else if (definition.kind === 'chaos' && chaosOrder) {
+      const before = { ...state.positions }
+      active.forEach((id, index) => {
+        state.positions[id] = before[chaosOrder[index]] ?? 0
+      })
+      pushLog(state, 'Caos: los jugadores activos intercambian posiciones.')
+      for (const id of active) {
+        eventNotice(
+          state,
+          `Caos: ${state.names[id]} aparece en ${BOARD[state.positions[id]].name}.`,
+        )
+      }
     }
   }
 

@@ -46,6 +46,8 @@ export const TURN_ORDER_REVEAL_MS = paced(4000)
 /** Anuncio del evento inicial: tiempo completo y salida animada. */
 export const EVENT_BANNER_MS = paced(5000)
 export const EVENT_BANNER_EXIT_MS = paced(400)
+/** Salida breve de la tarjeta desplegable de la etiqueta de evento. */
+export const EVENT_CARD_EXIT_MS = 160
 
 /** Subastas de evento. */
 export const AUCTION_SECRET_MS = paced(20000)

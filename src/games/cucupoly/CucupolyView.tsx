@@ -11,32 +11,33 @@ import {
 } from './buildings'
 import {
   AUCTION_NAMES,
+  getDiceCount,
   rentFor,
   type CucupolyState,
   type TradeState,
 } from './engine'
 import {
-  EVENTS,
   AUCTION_OPEN_IDLE_TICKS,
-  FINAL_EVENTS,
+  INITIAL_EVENT_ROUND,
   MIN_RAISE,
-  discountRoundsLeft,
-  drawableEvents,
-  drawableFinalEvents,
-  finalEventRoundsLeft,
-  finalPriceMultiplier,
+  eventPoolForRound,
+  eventPriceMultiplier,
   freeAuctionTiles,
   hasSeenEvent,
   hasSeenFinalEvent,
   isAuctionEvent,
-  isDiscountActive,
-  isFinalEventActive,
+  isDiceEventId,
+  isFinalEventId,
   markEventSeen,
   markFinalEventSeen,
   purchasePriceFor,
-  type FinalEventId,
-  type InitialEventId,
 } from './events'
+import { ActiveEventPill, DiceEventMenu, EventBanner } from './EventHud'
+import { eventKey, type EventBannerData } from './eventUi'
+import {
+  EVENT_GAP_MAX_ROUNDS,
+  EVENT_GAP_MIN_ROUNDS,
+} from './eventScheduler'
 import { planAnimations, snapshotSeen, type RollPlan, type SeenRoll } from './planAnimations'
 import {
   AUCTION_SECRET_MS,
@@ -91,7 +92,7 @@ function phaseHint(state: CucupolyState): string {
     case 'waiting-roll':
       return `${nameOf(state, state.turnOrder[state.currentIndex])} debe tirar.`
     case 'event':
-      return 'Sorteando el evento inicial…'
+      return 'Sorteando el evento de la ronda…'
     case 'final-event':
       return 'Sorteando el evento final…'
     case 'buy-decision':
@@ -430,12 +431,7 @@ function ActionPanel({ state, me, dispatch }: PanelProps) {
 
   if (state.phase === 'buy-decision' && state.pendingBuy !== null) {
     const tile = BOARD[state.pendingBuy]
-    const price = purchasePriceFor(
-      tile.price ?? 0,
-      state.initialEvent,
-      state.roundNumber,
-      state.finalEvent,
-    )
+    const price = purchasePriceFor(tile.price ?? 0, state.activeEvent, state.roundNumber)
     if (!isMyTurn) {
       return <p className="muted">Esperando a {nameOf(state, current)}…</p>
     }
@@ -534,6 +530,8 @@ function ActionPanel({ state, me, dispatch }: PanelProps) {
   }
 
   const inJail = state.inJail[me.id] === true
+  const diceEvent =
+    state.activeEvent && isDiceEventId(state.activeEvent.id) ? state.activeEvent : null
 
   return (
     <div className="cp-action">
@@ -542,15 +540,24 @@ function ActionPanel({ state, me, dispatch }: PanelProps) {
           Estás en la cárcel: paga {money(RULES.jailFine)} o espera {RULES.jailTurns} turnos.
         </p>
       ) : null}
-      <div className="actions">
-        <button className="primary" type="button" onClick={() => dispatch({ type: 'roll' })}>
-          {inJail ? 'Esperar turno' : 'Tirar dados'}
-        </button>
-        {inJail ? (
-          <button className="ghost" type="button" onClick={() => dispatch({ type: 'pay-bail' })}>
-            Pagar fianza {money(RULES.jailFine)}
-          </button>
+      <div className="cp2-roll-row">
+        {diceEvent && state.phase === 'waiting-roll' && !inJail && state.dice === null ? (
+          <DiceEventMenu
+            event={diceEvent}
+            diceCount={getDiceCount(state)}
+            roundNumber={state.roundNumber}
+          />
         ) : null}
+        <div className="actions">
+          <button className="primary" type="button" onClick={() => dispatch({ type: 'roll' })}>
+            {inJail ? 'Esperar turno' : 'Tirar dados'}
+          </button>
+          {inJail ? (
+            <button className="ghost" type="button" onClick={() => dispatch({ type: 'pay-bail' })}>
+              Pagar fianza {money(RULES.jailFine)}
+            </button>
+          ) : null}
+        </div>
       </div>
 
       {!inJail ? (
@@ -648,7 +655,7 @@ function ActionPanel({ state, me, dispatch }: PanelProps) {
 /** Panel de construcción: solo grupos completos del jugador, con costo y nivel. */
 function BuildPanel({ state, me, dispatch, myMoney }: PanelProps & { myMoney: number }) {
   const [selected, setSelected] = useState<number | ''>('')
-  const multiplier = finalPriceMultiplier(state.finalEvent, state.roundNumber)
+  const multiplier = eventPriceMultiplier(state.activeEvent, state.roundNumber)
   const groups = completeGroupsFor(state, me.id, multiplier)
 
   if (groups.length === 0) {
@@ -756,12 +763,7 @@ function TileSheet({
     tile.price === undefined
       ? null
       : ownerId === null
-        ? purchasePriceFor(
-            tile.price,
-            state.initialEvent,
-            state.roundNumber,
-            state.finalEvent,
-          )
+        ? purchasePriceFor(tile.price, state.activeEvent, state.roundNumber)
         : tile.price
   const discounted = purchasePrice !== null && purchasePrice !== tile.price
 
@@ -851,14 +853,19 @@ export function CucupolyView({
   const [play, setPlay] = useState<RollPlan | null>(null)
   const [diceBlocked, setDiceBlocked] = useState(false)
   const [banner, setBanner] = useState<string | null>(null)
-  const [eventBanner, setEventBanner] = useState<InitialEventId | null>(null)
+  const [eventBanner, setEventBanner] = useState<EventBannerData | null>(null)
   const [eventLeaving, setEventLeaving] = useState(false)
-  const [finalBanner, setFinalBanner] = useState<FinalEventId | null>(null)
-  const [finalLeaving, setFinalLeaving] = useState(false)
   const [turnPause, setTurnPause] = useState(false)
   const seenRoll = useRef<SeenRoll | null>(null)
-  const seenEventSeq = useRef(0)
-  const seenFinalEventSeq = useRef(0)
+  // Se inicializan con la secuencia actual: al reconectar o entrar tarde no se
+  // reproducen anuncios pasados, pero la etiqueta sigue leyendo `activeEvent`.
+  const seenEventSeq = useRef(state.initialEventSeq)
+  const seenFinalEventSeq = useRef(state.finalEventSeq)
+  const bannerTimers = useRef<{ leave: number | null; clear: number | null }>({
+    leave: null,
+    clear: null,
+  })
+  const shownBannerKey = useRef<string | null>(null)
   // El id (no el índice) evita pausas falsas cuando un eliminado sale del orden.
   const turnKey = `${state.turnNumber}:${state.turnOrder[state.currentIndex] ?? ''}`
   const lastTurnKey = useRef(turnKey)
@@ -867,15 +874,57 @@ export function CucupolyView({
     state.phase === 'turn-order-roll' && state.turnOrderState
       ? state.turnOrderState.queue[0] ?? state.turnOrder[0]
       : state.turnOrder[state.currentIndex]
-  const modifier =
-    state.diceModifier &&
-    state.turnNumber >= state.diceModifier.from &&
-    state.turnNumber < state.diceModifier.until
-      ? state.diceModifier
-      : null
+  const activeEventKey = eventKey(state.activeEvent)
+  const lastActiveEventKey = useRef(activeEventKey)
 
   const handleSelect = useCallback((index: number) => setSelected(index), [])
   const handleBusy = useCallback((value: boolean) => setBusy(value), [])
+
+  const clearBannerTimers = useCallback(() => {
+    if (bannerTimers.current.leave !== null) {
+      window.clearTimeout(bannerTimers.current.leave)
+    }
+    if (bannerTimers.current.clear !== null) {
+      window.clearTimeout(bannerTimers.current.clear)
+    }
+    bannerTimers.current = { leave: null, clear: null }
+  }, [])
+
+  const resetEventBanner = useCallback(() => {
+    shownBannerKey.current = null
+    setEventBanner(null)
+    setEventLeaving(false)
+  }, [])
+
+  const showEventBanner = useCallback(
+    (data: EventBannerData) => {
+      clearBannerTimers()
+      shownBannerKey.current = data.key
+      setEventBanner(data)
+      setEventLeaving(false)
+      bannerTimers.current.leave = window.setTimeout(() => {
+        bannerTimers.current.leave = null
+        setEventLeaving(true)
+      }, EVENT_BANNER_MS)
+      bannerTimers.current.clear = window.setTimeout(() => {
+        bannerTimers.current.clear = null
+        resetEventBanner()
+      }, EVENT_BANNER_MS + EVENT_BANNER_EXIT_MS)
+    },
+    [clearBannerTimers, resetEventBanner],
+  )
+
+  const dismissEventBanner = useCallback(() => {
+    if (!eventBanner) return
+    clearBannerTimers()
+    setEventLeaving(true)
+    bannerTimers.current.clear = window.setTimeout(() => {
+      bannerTimers.current.clear = null
+      resetEventBanner()
+    }, EVENT_BANNER_EXIT_MS)
+  }, [eventBanner, clearBannerTimers, resetEventBanner])
+
+  useEffect(() => () => clearBannerTimers(), [clearBannerTimers])
 
   // Detección sincrónica durante el render: al llegar un snapshot con una
   // tirada nueva (rollSeq distinto), el plan y el bloqueo entran en esta misma
@@ -976,35 +1025,40 @@ export function CucupolyView({
     })
   }, [isHost])
 
-  // El anfitrión sortea el evento inicial FUERA del reducer y lo aplica como
-  // acción; así el reducer sigue siendo puro y determinista. Las subastas solo
-  // entran al sorteo si queda alguna propiedad sin dueño.
+  // Único sorteo del anfitrión. El planificador decide si toca evento
+  // (`nextEventRound`), valida el pool y garantiza que solo haya uno activo. La
+  // aleatoriedad (evento, propiedad de la subasta, permutación del caos y pausa)
+  // se genera aquí, fuera del reducer.
   const drawnRound = useRef(0)
   useEffect(() => {
-    if (!isHost || state.phase !== 'event' || state.initialEvent !== null) return
+    if (!isHost || state.phase !== 'event' || state.activeEvent !== null) return
+    if (state.roundNumber < state.nextEventRound) return
     if (drawnRound.current === state.roundNumber) return
     drawnRound.current = state.roundNumber
 
-    const free = freeAuctionTiles(state.owners)
-    const pool = drawableEvents(state.owners)
-    const eventId = pool[Math.floor(Math.random() * pool.length)]
-    const tileId = isAuctionEvent(eventId)
-      ? free[Math.floor(Math.random() * free.length)]
-      : undefined
-    dispatch({ type: 'start-initial-event', payload: { eventId, tileId } })
-  }, [isHost, state.phase, state.initialEvent, state.owners, state.roundNumber, dispatch])
+    const initialRound =
+      state.initialEvent === null && state.roundNumber === INITIAL_EVENT_ROUND
+    let pool = eventPoolForRound(state.roundNumber, state.owners, state.lastEventId)
+    if (initialRound) {
+      pool = pool.filter((id) => !isFinalEventId(id) && !isDiceEventId(id))
+    }
 
-  // Evento final: desde la ronda 12, el anfitrión sortea fuera del reducer.
-  // Nunca repite el anterior y, en Caos, genera la permutación de asientos.
-  const drawnFinalRound = useRef(0)
-  useEffect(() => {
-    if (!isHost || state.phase !== 'final-event') return
-    if (drawnFinalRound.current === state.roundNumber) return
-    drawnFinalRound.current = state.roundNumber
+    const scheduled = state.scheduledEventId
+    const eventId =
+      scheduled && pool.includes(scheduled)
+        ? scheduled
+        : pool[Math.floor(Math.random() * pool.length)]
+    if (!eventId) return
 
-    const pool = drawableFinalEvents(state.finalEvent?.id ?? null)
-    const eventId = pool[Math.floor(Math.random() * pool.length)]
-    const payload: Record<string, unknown> = { eventId }
+    const gapRounds =
+      EVENT_GAP_MIN_ROUNDS +
+      Math.floor(Math.random() * (EVENT_GAP_MAX_ROUNDS - EVENT_GAP_MIN_ROUNDS + 1))
+    const payload: Record<string, unknown> = { eventId, gapRounds }
+
+    if (isAuctionEvent(eventId)) {
+      const free = freeAuctionTiles(state.owners)
+      payload.tileId = free[Math.floor(Math.random() * free.length)]
+    }
 
     if (eventId === 'caos') {
       const active = state.order.filter((id) => !state.bankrupt.includes(id))
@@ -1018,12 +1072,17 @@ export function CucupolyView({
       payload.order = order
     }
 
-    dispatch({ type: 'start-final-event', payload })
+    dispatch({ type: 'start-event', payload })
   }, [
     isHost,
     state.phase,
+    state.activeEvent,
     state.roundNumber,
-    state.finalEvent,
+    state.nextEventRound,
+    state.initialEvent,
+    state.scheduledEventId,
+    state.lastEventId,
+    state.owners,
     state.order,
     state.bankrupt,
     dispatch,
@@ -1072,61 +1131,77 @@ export function CucupolyView({
     return () => window.clearTimeout(timer)
   }, [isHost, sealedAuction, state.eventSeq, dispatch])
 
-  // Anuncio del evento inicial: se dispara con `eventSeq` una sola vez por
-  // cliente. `sessionStorage` evita repetirlo al reconectar o recargar.
+  // Anuncio del evento inicial: se dispara con `initialEventSeq` una sola vez
+  // por cliente (no con `eventSeq`, que también avanza con otros eventos).
+  // Los temporizadores viven fuera del efecto: un snapshot nuevo ya no cancela
+  // la salida del banner.
   useEffect(() => {
-    const seq = state.eventSeq
+    const seq = state.initialEventSeq
     const eventId = state.initialEvent
-    if (!eventId || seq <= 0) return
-    if (seenEventSeq.current >= seq) return
+    if (!eventId || seq <= seenEventSeq.current) return
     seenEventSeq.current = seq
     if (hasSeenEvent(state.seed, seq)) return
 
     markEventSeen(state.seed, seq)
-    setEventBanner(eventId)
-    setEventLeaving(false)
-    const leave = window.setTimeout(() => setEventLeaving(true), EVENT_BANNER_MS)
-    const clear = window.setTimeout(() => {
-      setEventBanner(null)
-      setEventLeaving(false)
-    }, EVENT_BANNER_MS + EVENT_BANNER_EXIT_MS)
-    return () => {
-      window.clearTimeout(leave)
-      window.clearTimeout(clear)
-    }
-  }, [state.eventSeq, state.initialEvent, state.seed])
+    showEventBanner({ id: eventId, kind: 'initial', key: activeEventKey })
+  }, [
+    state.initialEventSeq,
+    state.initialEvent,
+    state.seed,
+    activeEventKey,
+    showEventBanner,
+  ])
 
-  // Anuncio del evento final: una sola vez por cliente, con clave propia para
-  // no confundirlo con el evento inicial.
+  // Anuncio del evento final: misma regla, con secuencia propia.
   useEffect(() => {
     const seq = state.finalEventSeq
     const event = state.finalEvent
-    if (!event || seq <= 0) return
-    if (seenFinalEventSeq.current >= seq) return
+    if (!event || seq <= seenFinalEventSeq.current) return
     seenFinalEventSeq.current = seq
     if (hasSeenFinalEvent(state.seed, seq)) return
 
     markFinalEventSeen(state.seed, seq)
-    setFinalBanner(event.id)
-    setFinalLeaving(false)
-    const leave = window.setTimeout(() => setFinalLeaving(true), EVENT_BANNER_MS)
-    const clear = window.setTimeout(() => {
-      setFinalBanner(null)
-      setFinalLeaving(false)
-    }, EVENT_BANNER_MS + EVENT_BANNER_EXIT_MS)
-    return () => {
-      window.clearTimeout(leave)
-      window.clearTimeout(clear)
-    }
-  }, [state.finalEventSeq, state.finalEvent, state.seed])
+    showEventBanner({ id: event.id, kind: 'final', key: activeEventKey })
+  }, [state.finalEventSeq, state.finalEvent, state.seed, activeEventKey, showEventBanner])
+
+  // Cambiar de evento, cerrarlo o terminar la partida retira el anuncio. El
+  // `key` evita que un anuncio recién abierto se borre en el mismo commit.
+  useEffect(() => {
+    if (lastActiveEventKey.current === activeEventKey) return
+    lastActiveEventKey.current = activeEventKey
+    if (shownBannerKey.current === null || shownBannerKey.current === activeEventKey) return
+    clearBannerTimers()
+    resetEventBanner()
+  }, [activeEventKey, clearBannerTimers, resetEventBanner])
+
+  useEffect(() => {
+    if (state.phase !== 'finished') return
+    clearBannerTimers()
+    resetEventBanner()
+  }, [state.phase, clearBannerTimers, resetEventBanner])
+
+  // Nueva partida en la misma vista: reinicia los cursores de anuncios para
+  // que su primer evento sí se muestre.
+  const seedRef = useRef(state.seed)
+  useEffect(() => {
+    if (seedRef.current === state.seed) return
+    seedRef.current = state.seed
+    seenEventSeq.current = state.initialEventSeq
+    seenFinalEventSeq.current = state.finalEventSeq
+    clearBannerTimers()
+    resetEventBanner()
+  }, [
+    state.seed,
+    state.initialEventSeq,
+    state.finalEventSeq,
+    clearBannerTimers,
+    resetEventBanner,
+  ])
 
   // Los avisos no compiten con los anuncios grandes (evento inicial u orden de
   // turnos). Tras la victoria se dejan correr para que el último «quedó en
   // bancarrota» también llegue a todos.
-  const noticesPaused =
-    eventBanner !== null ||
-    finalBanner !== null ||
-    state.phase === 'turn-order-reveal'
+  const noticesPaused = eventBanner !== null || state.phase === 'turn-order-reveal'
   const noticeQueue = useNoticeQueue(state.notices, state.noticeSeq, noticesPaused)
 
   const roll = play
@@ -1144,10 +1219,6 @@ export function CucupolyView({
       : phaseHint(state)
   const locked = animating || turnPause
   const acting = mustAct(state, me.id)
-  const activeFinalEvent =
-    state.finalEvent && isFinalEventActive(state.finalEvent, state.roundNumber)
-      ? state.finalEvent
-      : null
 
   return (
     <div
@@ -1175,37 +1246,11 @@ export function CucupolyView({
       ) : null}
 
       {eventBanner ? (
-        <div
-          className={`cp-event-overlay${eventLeaving ? ' is-leaving' : ''}`}
-          role="status"
-          aria-live="assertive"
-        >
-          <div className="cp-event-card">
-            <span className="cp-event-icon" aria-hidden="true">
-              {EVENTS[eventBanner].icon}
-            </span>
-            <span className="cp-eyebrow">Evento inicial</span>
-            <h2>{EVENTS[eventBanner].name}</h2>
-            <p>{EVENTS[eventBanner].description}</p>
-          </div>
-        </div>
-      ) : null}
-
-      {finalBanner ? (
-        <div
-          className={`cp-event-overlay${finalLeaving ? ' is-leaving' : ''}`}
-          role="status"
-          aria-live="assertive"
-        >
-          <div className="cp-event-card">
-            <span className="cp-event-icon" aria-hidden="true">
-              {FINAL_EVENTS[finalBanner].icon}
-            </span>
-            <span className="cp-eyebrow">Evento final</span>
-            <h2>{FINAL_EVENTS[finalBanner].name}</h2>
-            <p>{FINAL_EVENTS[finalBanner].description}</p>
-          </div>
-        </div>
+        <EventBanner
+          banner={eventBanner}
+          leaving={eventLeaving}
+          onDismiss={dismissEventBanner}
+        />
       ) : null}
 
       {state.phase === 'turn-order-reveal' && state.turnOrderState ? (
@@ -1281,6 +1326,16 @@ export function CucupolyView({
           })}
         </div>
 
+        {state.activeEvent ? (
+          <div className="cp2-event-pill-slot">
+            <ActiveEventPill
+              key={activeEventKey ?? state.activeEvent.id}
+              event={state.activeEvent}
+              roundNumber={state.roundNumber}
+            />
+          </div>
+        ) : null}
+
         <div className="cp-turnbanner" role="status">
           <span className="cp-eyebrow">
             {state.phase === 'turn-order-roll' || state.phase === 'turn-order-reveal'
@@ -1289,22 +1344,6 @@ export function CucupolyView({
           </span>
           <strong>{nameOf(state, current)}</strong>
           <span className="cp-phase">{statusHint}</span>
-          {modifier ? <span className="cp-badge">🎲 {modifier.dice} dado(s)</span> : null}
-          {isDiscountActive(state.initialEvent, state.roundNumber) ? (
-            <span className="cp-badge cp-badge-discount">
-              🏷️ Semana de descuentos: quedan {discountRoundsLeft(state.roundNumber)}{' '}
-              {discountRoundsLeft(state.roundNumber) === 1 ? 'ronda' : 'rondas'}
-            </span>
-          ) : null}
-          {activeFinalEvent ? (
-            <span className={`cp-badge cp-badge-final cp-badge-final-${activeFinalEvent.id}`}>
-              {FINAL_EVENTS[activeFinalEvent.id].icon} {FINAL_EVENTS[activeFinalEvent.id].name}:
-              quedan {finalEventRoundsLeft(activeFinalEvent, state.roundNumber)}{' '}
-              {finalEventRoundsLeft(activeFinalEvent, state.roundNumber) === 1
-                ? 'ronda'
-                : 'rondas'}
-            </span>
-          ) : null}
         </div>
 
         <NoticeTicker notice={noticeQueue.current} />
