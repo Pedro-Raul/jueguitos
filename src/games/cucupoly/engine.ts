@@ -57,6 +57,7 @@ import {
   table21Transfers,
   type Table21Settlement,
 } from './table21'
+import { END_TURN_TICKS } from './timing'
 
 export type Phase =
   | 'turn-order-roll'
@@ -204,6 +205,13 @@ export type CucupolyState = {
   auction: AuctionState | null
   table21: Table21State | null
   trade: TradeState | null
+  /**
+   * Ventana posterior a la tirada: el jugador aún puede intercambiar y debe
+   * pulsar Continuar (o dejar que venza el reloj) antes de ceder el turno.
+   */
+  endTurnPending: boolean
+  /** Tics restantes de la ventana de fin de turno; 0 fuera de ella. */
+  endTurnTicks: number
   log: LogEntry[]
   /** Cola corta de avisos temporales (no es un historial). */
   notices: Notice[]
@@ -438,6 +446,8 @@ function finishGame(state: CucupolyState, remaining: readonly string[]): void {
   state.trade = null
   state.table21 = null
   state.auction = null
+  state.endTurnPending = false
+  state.endTurnTicks = 0
   compactTurnOrder(state)
   pushLog(
     state,
@@ -445,8 +455,36 @@ function finishGame(state: CucupolyState, remaining: readonly string[]): void {
   )
 }
 
-function endTurn(state: CucupolyState): void {
+/**
+ * Cierre de turno. Tras una tirada real abre una ventana para intercambiar y
+ * pulsar Continuar; sin tirada (cárcel, etc.) avanza directamente. `rollerId`
+ * evita abrir la ventana si quien tiró quedó eliminado al resolver la casilla.
+ */
+function endTurn(state: CucupolyState, rollerId: string = currentId(state)): void {
   // La bancarrota puede haber cerrado la partida antes de llegar aquí.
+  if (state.phase === 'finished') return
+
+  if (
+    state.dice !== null &&
+    rollerId === currentId(state) &&
+    !state.bankrupt.includes(rollerId)
+  ) {
+    state.endTurnPending = true
+    state.endTurnTicks = END_TURN_TICKS
+    state.phase = 'waiting-roll'
+    state.pendingBuy = null
+    state.pendingBus = null
+    state.trade = null
+    state.table21 = null
+    state.auction = null
+    return
+  }
+
+  advanceTurn(state)
+}
+
+/** Avanza de verdad al siguiente jugador y resuelve el cambio de ronda. */
+function advanceTurn(state: CucupolyState): void {
   if (state.phase === 'finished') return
 
   const remaining = activeIds(state)
@@ -455,6 +493,8 @@ function endTurn(state: CucupolyState): void {
     return
   }
 
+  state.endTurnPending = false
+  state.endTurnTicks = 0
   state.turnNumber += 1
   state.dice = null
   state.pendingBuy = null
@@ -747,6 +787,8 @@ export function init(players: Player[], seed: number): CucupolyState {
     auction: null,
     table21: null,
     trade: null,
+    endTurnPending: false,
+    endTurnTicks: 0,
     log: [],
     notices: [],
     noticeSeq: 0,
@@ -813,6 +855,10 @@ export function reduce(
       return handleAllowTrade(state, playerId)
     case 'cancel-trade':
       return handleCancelTrade(state, playerId)
+    case 'continue-turn':
+      return handleContinueTurn(state, playerId)
+    case 'end-turn-tick':
+      return handleEndTurnTick(state, playerId)
     case 'join-table':
       return handleJoinTable(state, playerId, action.payload)
     case 'pass-table':
@@ -949,6 +995,9 @@ function handleFinishTurnOrder(
 function handleRoll(state: CucupolyState, playerId: string): CucupolyState | { error: string } {
   if (state.phase !== 'waiting-roll') return { error: 'Ahora no toca tirar.' }
   if (currentId(state) !== playerId) return { error: 'No es tu turno.' }
+  if (state.endTurnPending) {
+    return { error: 'Ya tiraste en este turno. Pulsa Continuar para cerrarlo.' }
+  }
 
   if (state.inJail[playerId]) {
     const turns = (state.jailTurns[playerId] ?? 0) + 1
@@ -1027,7 +1076,7 @@ function handleLanding(
           state,
           `Apagón: ${tile.name} no se puede comprar mientras dure la habilidad de Ser. Luz.`,
         )
-        endTurn(state)
+        endTurn(state, playerId)
         return state
       }
       state.pendingBuy = tileId
@@ -1037,7 +1086,7 @@ function handleLanding(
 
     if (owner === playerId) {
       pushLog(state, `${state.names[playerId]} cae en su propia casilla.`)
-      endTurn(state)
+      endTurn(state, playerId)
       return state
     }
 
@@ -1055,7 +1104,7 @@ function handleLanding(
         ? `alquiler en ${tile.name}, +15% por Abastecimiento`
         : `alquiler en ${tile.name}`,
     )
-    endTurn(state)
+    endTurn(state, playerId)
     return state
   }
 
@@ -1069,7 +1118,7 @@ function handleLanding(
       } else {
         pay(state, playerId, null, -card.amount, 'carta de tesorería')
       }
-      endTurn(state)
+      endTurn(state, playerId)
       return state
     }
     case 'tax': {
@@ -1083,11 +1132,11 @@ function handleLanding(
           : `Impuesto: ${state.names[playerId]} pagó $${amount} al banco.`,
       )
       pay(state, playerId, null, amount, 'impuesto')
-      endTurn(state)
+      endTurn(state, playerId)
       return state
     }
     case 'chance': {
-      drawChance(state)
+      drawChance(state, playerId)
       return state
     }
     case 'go-to-jail': {
@@ -1099,17 +1148,17 @@ function handleLanding(
         state,
         `Cárcel: ${state.names[playerId]} fue enviado a la cárcel; pierde hasta ${RULES.jailTurns} turnos o paga $${RULES.jailFine} de fianza.`,
       )
-      endTurn(state)
+      endTurn(state, playerId)
       return state
     }
     default: {
-      endTurn(state)
+      endTurn(state, playerId)
       return state
     }
   }
 }
 
-function drawChance(state: CucupolyState): void {
+function drawChance(state: CucupolyState, playerId: string): void {
   const event = CHANCE_EVENTS[randomInt(state, 0, CHANCE_EVENTS.length - 1)]
 
   if (event === 'slow' || event === 'fast') {
@@ -1138,7 +1187,7 @@ function drawChance(state: CucupolyState): void {
         `Sorpresa: ${definition.name} no se aplica: ${result.reason}`,
       )
     }
-    endTurn(state)
+    endTurn(state, playerId)
     return
   }
 
@@ -1201,7 +1250,12 @@ function handleBuild(
   payload: unknown,
   kind: 'house' | 'hotel',
 ): CucupolyState | { error: string } {
-  if (state.phase !== 'waiting-roll' || currentId(state) !== playerId) {
+  if (
+    state.phase !== 'waiting-roll' ||
+    currentId(state) !== playerId ||
+    state.endTurnPending ||
+    state.dice !== null
+  ) {
     return { error: 'Solo puedes construir en tu turno antes de tirar.' }
   }
 
@@ -1599,7 +1653,12 @@ function resolveOpenAuction(state: CucupolyState): void {
 }
 
 function handlePayBail(state: CucupolyState, playerId: string): CucupolyState | { error: string } {
-  if (state.phase !== 'waiting-roll' || currentId(state) !== playerId) {
+  if (
+    state.phase !== 'waiting-roll' ||
+    currentId(state) !== playerId ||
+    state.endTurnPending ||
+    state.dice !== null
+  ) {
     return { error: 'Solo puedes pagar la fianza en tu turno antes de tirar.' }
   }
   if (!state.inJail[playerId]) return { error: 'No estás en la cárcel.' }
@@ -1628,7 +1687,12 @@ function handleActivateAbility(
   const tile = BOARD[tileId]
   if (!tile || tile.type !== 'service') return { error: 'Esa casilla no tiene habilidad.' }
   if (state.owners[tileId] !== playerId) return { error: 'No eres el dueño de ese servicio.' }
-  if (state.phase !== 'waiting-roll' || currentId(state) !== playerId) {
+  if (
+    state.phase !== 'waiting-roll' ||
+    currentId(state) !== playerId ||
+    state.endTurnPending ||
+    state.dice !== null
+  ) {
     return { error: 'Solo puedes activarla en tu turno antes de tirar.' }
   }
 
@@ -1675,7 +1739,7 @@ function handleProposeTrade(
   payload: unknown,
 ): CucupolyState | { error: string } {
   if (state.phase !== 'waiting-roll' || currentId(state) !== playerId) {
-    return { error: 'Solo puedes proponer tratos en tu turno antes de tirar.' }
+    return { error: 'Solo puedes proponer tratos en tu turno.' }
   }
   if (typeof payload !== 'object' || payload === null) return { error: 'Trato no válido.' }
 
@@ -1740,6 +1804,54 @@ function handleProposeTrade(
   return state
 }
 
+/** Motivo por el que un trato ya no puede cerrarse, o null si sigue válido. */
+function tradeRevalidationError(state: CucupolyState, trade: TradeState): string | null {
+  if (trade.from === trade.to) return 'el trato no tiene dos partes distintas'
+  for (const id of [trade.from, trade.to]) {
+    if (!state.order.includes(id) || state.bankrupt.includes(id)) {
+      return `${state.names[id] ?? id} ya no está en la partida`
+    }
+  }
+  if (!Number.isInteger(trade.giveMoney) || trade.giveMoney < 0) {
+    return 'el dinero ofrecido no es válido'
+  }
+  if (!Number.isInteger(trade.getMoney) || trade.getMoney < 0) {
+    return 'el dinero pedido no es válido'
+  }
+  if (trade.giveMoney > (state.money[trade.from] ?? 0)) {
+    return `${state.names[trade.from]} ya no tiene el dinero ofrecido`
+  }
+  if (trade.getMoney > (state.money[trade.to] ?? 0)) {
+    return `${state.names[trade.to]} ya no tiene el dinero pedido`
+  }
+
+  for (const tileId of trade.giveTiles) {
+    if (!BOARD[tileId] || state.owners[tileId] !== trade.from) {
+      return `${BOARD[tileId]?.name ?? 'una propiedad'} ya no pertenece a ${state.names[trade.from]}`
+    }
+  }
+  for (const tileId of trade.getTiles) {
+    if (!BOARD[tileId] || state.owners[tileId] !== trade.to) {
+      return `${BOARD[tileId]?.name ?? 'una propiedad'} ya no pertenece a ${state.names[trade.to]}`
+    }
+  }
+
+  return null
+}
+
+/** Cancela el trato y avisa a todos; el estado no sufre ningún intercambio. */
+function cancelInvalidTrade(state: CucupolyState, reason: string): void {
+  const trade = state.trade
+  if (!trade) return
+  state.trade = null
+  state.phase = 'waiting-roll'
+  pushLog(state, `Trato cancelado: ${reason}.`)
+  eventNotice(
+    state,
+    `Trato cancelado entre ${state.names[trade.from]} y ${state.names[trade.to]}: ${reason}.`,
+  )
+}
+
 function handleAcceptTrade(
   state: CucupolyState,
   playerId: string,
@@ -1749,15 +1861,25 @@ function handleAcceptTrade(
   if (trade.stage !== 'pending') return { error: 'El trato aún no está listo.' }
   if (playerId !== trade.to) return { error: 'Solo el receptor puede aceptar.' }
 
+  // Revalidación autoritativa: si algo cambió desde la propuesta, se cancela
+  // antes de mover una sola propiedad o moneda.
+  const invalid = tradeRevalidationError(state, trade)
+  if (invalid) {
+    cancelInvalidTrade(state, invalid)
+    return state
+  }
+
   const net = trade.giveMoney - trade.getMoney
   if (net > 0) {
     if (!charge(state, trade.from, trade.to, net, 'intercambio', 'spend')) {
-      return { error: 'No hay dinero suficiente para cerrar el trato.' }
+      cancelInvalidTrade(state, 'no hay dinero suficiente para cerrar el trato')
+      return state
     }
     moneyNotice(state, trade.from, trade.to, net, 'intercambio')
   } else if (net < 0) {
     if (!charge(state, trade.to, trade.from, -net, 'intercambio', 'spend')) {
-      return { error: 'No hay dinero suficiente para cerrar el trato.' }
+      cancelInvalidTrade(state, 'no hay dinero suficiente para cerrar el trato')
+      return state
     }
     moneyNotice(state, trade.to, trade.from, -net, 'intercambio')
   }
@@ -1850,6 +1972,38 @@ function handleCancelTrade(
   )
   state.trade = null
   state.phase = 'waiting-roll'
+  return state
+}
+
+/** El jugador actual cierra su ventana de fin de turno antes de que venza. */
+function handleContinueTurn(
+  state: CucupolyState,
+  playerId: string,
+): CucupolyState | { error: string } {
+  if (!state.endTurnPending || state.phase !== 'waiting-roll') {
+    return { error: 'No hay una ventana de fin de turno abierta.' }
+  }
+  if (currentId(state) !== playerId) return { error: 'Solo el jugador actual puede continuar.' }
+
+  advanceTurn(state)
+  return state
+}
+
+/**
+ * Reloj del anfitrión. Cada tic descuenta uno y, al llegar a cero, cierra el
+ * turno aunque el jugador no haya pulsado Continuar.
+ */
+function handleEndTurnTick(
+  state: CucupolyState,
+  playerId: string,
+): CucupolyState | { error: string } {
+  if (playerId !== state.order[0]) return { error: 'Solo el anfitrión controla el reloj.' }
+  if (!state.endTurnPending || state.phase !== 'waiting-roll') {
+    return { error: 'No hay una ventana de fin de turno abierta.' }
+  }
+
+  state.endTurnTicks = Math.max(0, state.endTurnTicks - 1)
+  if (state.endTurnTicks <= 0) advanceTurn(state)
   return state
 }
 

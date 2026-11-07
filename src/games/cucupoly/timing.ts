@@ -25,6 +25,17 @@ export const DICE_BANNER_MS = paced(2000)
 /** Pausa entre el final de una acción y el turno del siguiente jugador. */
 export const END_OF_TURN_PAUSE_MS = paced(1200)
 
+/**
+ * Ventana de decisiones al cerrar el turno. El jugador puede intercambiar o
+ * pulsar Continuar; al agotarse los tics, el anfitrión cierra el turno solo.
+ */
+export const END_TURN_WINDOW_MS = paced(20000)
+export const END_TURN_TICK_MS = paced(1000)
+export const END_TURN_TICKS = Math.max(
+  1,
+  Math.round(END_TURN_WINDOW_MS / END_TURN_TICK_MS),
+)
+
 /** Tiempo mínimo que un aviso permanece visible. */
 export const NOTICE_MIN_MS = 2500
 /** Tiempo real de cada aviso (nunca por debajo del mínimo). */

@@ -14,7 +14,6 @@ import {
   getDiceCount,
   rentFor,
   type CucupolyState,
-  type TradeState,
 } from './engine'
 import {
   AUCTION_OPEN_IDLE_TICKS,
@@ -45,6 +44,7 @@ import {
   DICE_BANNER_MS,
   DICE_SECONDS,
   END_OF_TURN_PAUSE_MS,
+  END_TURN_TICK_MS,
   EVENT_BANNER_EXIT_MS,
   EVENT_BANNER_MS,
   PACE,
@@ -53,6 +53,7 @@ import {
 import { NoticeTicker, useNoticeQueue } from './NoticeTicker'
 import type { Notice } from './notices'
 import { PropertiesViewer } from './PropertiesViewer'
+import { TradeComposer, TradeProposal } from './TradeMenu'
 import { RULES } from './rules.config'
 import { Table21Panel } from './Table21Panel'
 import { TurnActionBar } from './TurnActionBar'
@@ -92,7 +93,9 @@ function phaseHint(state: CucupolyState): string {
     case 'turn-order-reveal':
       return 'Orden de turnos definido.'
     case 'waiting-roll':
-      return `${nameOf(state, state.turnOrder[state.currentIndex])} debe tirar.`
+      return state.endTurnPending
+        ? `${nameOf(state, state.turnOrder[state.currentIndex])} puede intercambiar o continuar.`
+        : `${nameOf(state, state.turnOrder[state.currentIndex])} debe tirar.`
     case 'event':
       return 'Sorteando el evento de la ronda…'
     case 'final-event':
@@ -205,7 +208,7 @@ function actionIcon(state: CucupolyState): string {
     case 'bus-move':
       return '🚌'
     default:
-      return '🎲'
+      return state.endTurnPending ? '✅' : '🎲'
   }
 }
 
@@ -226,42 +229,21 @@ function actionTitle(state: CucupolyState, me: Player): string {
     case 'bus-move':
       return 'Parada de busetas'
     default:
-      return `Tu turno, ${nameOf(state, me.id)}`
+      return state.endTurnPending
+        ? 'Fin de tu turno'
+        : `Tu turno, ${nameOf(state, me.id)}`
   }
-}
-
-function describeTrade(state: CucupolyState, trade: TradeState): string {
-  const give = [
-    ...trade.giveTiles.map((tile) => BOARD[tile].name),
-    trade.giveMoney > 0 ? money(trade.giveMoney) : '',
-  ].filter(Boolean)
-  const get = [
-    ...trade.getTiles.map((tile) => BOARD[tile].name),
-    trade.getMoney > 0 ? money(trade.getMoney) : '',
-  ].filter(Boolean)
-
-  return `${nameOf(state, trade.from)} da ${give.join(', ') || 'nada'} y recibe ${
-    get.join(', ') || 'nada'
-  }.`
-}
-
-function toggle(list: number[], setList: (value: number[]) => void, value: number): void {
-  setList(list.includes(value) ? list.filter((item) => item !== value) : [...list, value])
 }
 
 type PanelProps = {
   state: CucupolyState
   me: Player
   dispatch: (action: GameAction) => void
+  onTrade: () => void
 }
 
-function ActionPanel({ state, me, dispatch }: PanelProps) {
+function ActionPanel({ state, me, dispatch, onTrade }: PanelProps) {
   const [bid, setBid] = useState('')
-  const [tradeTo, setTradeTo] = useState('')
-  const [giveTiles, setGiveTiles] = useState<number[]>([])
-  const [getTiles, setGetTiles] = useState<number[]>([])
-  const [giveMoney, setGiveMoney] = useState('')
-  const [getMoney, setGetMoney] = useState('')
 
   const current = state.turnOrder[state.currentIndex]
   const isMyTurn = current === me.id
@@ -457,59 +439,6 @@ function ActionPanel({ state, me, dispatch }: PanelProps) {
     )
   }
 
-  if (state.phase === 'trade' && state.trade) {
-    const trade = state.trade
-    if (trade.stage === 'veto') {
-      if (trade.vetoer === me.id) {
-        return (
-          <div className="cp-action">
-            <p>
-              {nameOf(state, trade.from)} quiere tratar con {nameOf(state, trade.to)}.
-            </p>
-            <div className="actions">
-              <button className="danger" type="button" onClick={() => dispatch({ type: 'veto-trade' })}>
-                Vetar
-              </button>
-              <button className="ghost" type="button" onClick={() => dispatch({ type: 'allow-trade' })}>
-                Dejar pasar
-              </button>
-            </div>
-          </div>
-        )
-      }
-      return <p className="muted">Esperando el veto de {nameOf(state, trade.vetoer)}…</p>
-    }
-
-    if (trade.to === me.id) {
-      return (
-        <div className="cp-action">
-          <p>{describeTrade(state, trade)}</p>
-          <div className="actions">
-            <button className="primary" type="button" onClick={() => dispatch({ type: 'accept-trade' })}>
-              Aceptar
-            </button>
-            <button className="ghost" type="button" onClick={() => dispatch({ type: 'reject-trade' })}>
-              Rechazar
-            </button>
-          </div>
-        </div>
-      )
-    }
-
-    if (trade.from === me.id) {
-      return (
-        <div className="cp-action">
-          <p className="muted">Esperando respuesta de {nameOf(state, trade.to)}…</p>
-          <button className="ghost" type="button" onClick={() => dispatch({ type: 'cancel-trade' })}>
-            Cancelar trato
-          </button>
-        </div>
-      )
-    }
-
-    return <p className="muted">Trato entre {nameOf(state, trade.from)} y {nameOf(state, trade.to)}.</p>
-  }
-
   if (state.phase === 'bus-move') {
     if (!isMyTurn) return <p className="muted">Esperando a {nameOf(state, current)}…</p>
     return (
@@ -523,6 +452,35 @@ function ActionPanel({ state, me, dispatch }: PanelProps) {
             Quedarme
           </button>
         </div>
+      </div>
+    )
+  }
+
+  if (state.endTurnPending) {
+    const seconds = Math.ceil((state.endTurnTicks * END_TURN_TICK_MS) / 1000)
+    return (
+      <div className="cp-action cp-endturn">
+        <p>
+          Turno resuelto. Puedes proponer un intercambio o continuar; el turno no cambia
+          hasta que pulses <strong>Continuar</strong>.
+        </p>
+        <div className="actions">
+          {!state.inJail[me.id] ? (
+            <button className="ghost" type="button" onClick={onTrade}>
+              🤝 Intercambio
+            </button>
+          ) : null}
+          <button
+            className="primary"
+            type="button"
+            onClick={() => dispatch({ type: 'continue-turn' })}
+          >
+            Continuar · {seconds}s
+          </button>
+        </div>
+        <p className="muted small">
+          Si el tiempo termina, el anfitrión cierra el turno automáticamente.
+        </p>
       </div>
     )
   }
@@ -562,100 +520,23 @@ function ActionPanel({ state, me, dispatch }: PanelProps) {
         </div>
       </div>
 
-      {!inJail ? (
-        <details className="cp-trade">
-          <summary>Proponer un trato</summary>
-          <select value={tradeTo} onChange={(event) => setTradeTo(event.target.value)}>
-            <option value="">Elige jugador</option>
-            {state.order
-              .filter((id) => id !== me.id && !state.bankrupt.includes(id))
-              .map((id) => (
-                <option key={id} value={id}>
-                  {nameOf(state, id)}
-                </option>
-              ))}
-          </select>
-
-          {tradeTo ? (
-            <>
-              <div className="cp-trade-cols">
-                <fieldset>
-                  <legend>Doy</legend>
-                  {BOARD.filter((tile) => state.owners[tile.index] === me.id).map((tile) => (
-                    <label key={tile.index}>
-                      <input
-                        type="checkbox"
-                        checked={giveTiles.includes(tile.index)}
-                        onChange={() => toggle(giveTiles, setGiveTiles, tile.index)}
-                      />
-                      {tile.name}
-                    </label>
-                  ))}
-                  <input
-                    type="number"
-                    min={0}
-                    max={myMoney}
-                    placeholder="Dinero"
-                    value={giveMoney}
-                    onChange={(event) => setGiveMoney(event.target.value)}
-                  />
-                </fieldset>
-                <fieldset>
-                  <legend>Recibo</legend>
-                  {BOARD.filter((tile) => state.owners[tile.index] === tradeTo).map((tile) => (
-                    <label key={tile.index}>
-                      <input
-                        type="checkbox"
-                        checked={getTiles.includes(tile.index)}
-                        onChange={() => toggle(getTiles, setGetTiles, tile.index)}
-                      />
-                      {tile.name}
-                    </label>
-                  ))}
-                  <input
-                    type="number"
-                    min={0}
-                    max={state.money[tradeTo] ?? 0}
-                    placeholder="Dinero"
-                    value={getMoney}
-                    onChange={(event) => setGetMoney(event.target.value)}
-                  />
-                </fieldset>
-              </div>
-              <button
-                className="primary"
-                type="button"
-                onClick={() => {
-                  dispatch({
-                    type: 'propose-trade',
-                    payload: {
-                      to: tradeTo,
-                      giveTiles,
-                      getTiles,
-                      giveMoney: Number(giveMoney || 0),
-                      getMoney: Number(getMoney || 0),
-                    },
-                  })
-                  setGiveTiles([])
-                  setGetTiles([])
-                  setGiveMoney('')
-                  setGetMoney('')
-                }}
-              >
-                Proponer
-              </button>
-            </>
-          ) : null}
-        </details>
-      ) : null}
-
       <BuildPanel state={state} me={me} dispatch={dispatch} myMoney={myMoney} />
     </div>
   )
 }
 
 /** Panel de construcción: solo grupos completos del jugador, con costo y nivel. */
-function BuildPanel({ state, me, dispatch, myMoney }: PanelProps & { myMoney: number }) {
+function BuildPanel({
+  state,
+  me,
+  dispatch,
+  myMoney,
+}: {
+  state: CucupolyState
+  me: Player
+  dispatch: (action: GameAction) => void
+  myMoney: number
+}) {
   const [selected, setSelected] = useState<number | ''>('')
   const multiplier = eventPriceMultiplier(state.activeEvent, state.roundNumber)
   const groups = completeGroupsFor(state, me.id, multiplier)
@@ -859,6 +740,7 @@ export function CucupolyView({
   const [eventLeaving, setEventLeaving] = useState(false)
   const [turnPause, setTurnPause] = useState(false)
   const [propertiesOpen, setPropertiesOpen] = useState(false)
+  const [tradeOpen, setTradeOpen] = useState(false)
   const seenRoll = useRef<SeenRoll | null>(null)
   // Se inicializan con la secuencia actual: al reconectar o entrar tarde no se
   // reproducen anuncios pasados, pero la etiqueta sigue leyendo `activeEvent`.
@@ -877,6 +759,7 @@ export function CucupolyView({
     state.phase === 'turn-order-roll' && state.turnOrderState
       ? state.turnOrderState.queue[0] ?? state.turnOrder[0]
       : state.turnOrder[state.currentIndex]
+  const isMyTurn = current === me.id
   const activeEventKey = eventKey(state.activeEvent)
   const lastActiveEventKey = useRef(activeEventKey)
 
@@ -887,6 +770,8 @@ export function CucupolyView({
     setPropertiesOpen(true)
   }, [])
   const closeProperties = useCallback(() => setPropertiesOpen(false), [])
+  const openTrade = useCallback(() => setTradeOpen(true), [])
+  const closeTrade = useCallback(() => setTradeOpen(false), [])
 
   const clearBannerTimers = useCallback(() => {
     if (bannerTimers.current.leave !== null) {
@@ -979,6 +864,14 @@ export function CucupolyView({
     return () => window.clearTimeout(timer)
   }, [turnPause, diceBlocked, busy])
 
+  // El menú de intercambio solo vive dentro de la ventana posterior a la tirada.
+  // Al proponer (o al cerrarse la ventana) desaparece y deja paso a la propuesta.
+  useEffect(() => {
+    if (!tradeOpen) return
+    const windowOpen = state.endTurnPending && state.phase === 'waiting-roll'
+    if (!windowOpen || state.trade !== null) setTradeOpen(false)
+  }, [tradeOpen, state.endTurnPending, state.phase, state.trade])
+
   // El anfitrión mueve el reloj de la Puja Abierta. Cada tic produce un
   // snapshot; el temporizador se reprograma al cambiar el contador o la puja,
   // así una mejora siempre regala la cuenta regresiva completa.
@@ -996,6 +889,17 @@ export function CucupolyView({
     }, AUCTION_TICK_MS)
     return () => window.clearTimeout(timer)
   }, [isHost, openAuction, auctionCountdown, auctionLeader, dispatch])
+
+  // Reloj de la ventana de fin de turno. El anfitrión descuenta tics y, al
+  // llegar a cero, el reducer cierra el turno aunque nadie pulse Continuar.
+  const endTurnWindow = state.endTurnPending && state.phase === 'waiting-roll'
+  useEffect(() => {
+    if (!isHost || !endTurnWindow) return
+    const timer = window.setTimeout(() => {
+      dispatch({ type: 'end-turn-tick' })
+    }, END_TURN_TICK_MS)
+    return () => window.clearTimeout(timer)
+  }, [isHost, endTurnWindow, state.endTurnTicks, dispatch])
 
   // Sorteo de orden: el jugador pide su tirada y el anfitrión genera el valor
   // fuera del reducer. El estado solo guarda el número ya decidido.
@@ -1230,6 +1134,13 @@ export function CucupolyView({
   // Marcador temporal: el siguiente paso conectará este booleano con las reglas
   // reales de construcción. Por ahora no se consulta el reducer.
   const canBuildNow = false
+  const trade = state.phase === 'trade' ? state.trade : null
+  const tradeVisible =
+    trade !== null &&
+    (trade.from === me.id ||
+      trade.to === me.id ||
+      (trade.vetoer === me.id && trade.stage === 'veto'))
+  const composerOpen = tradeOpen && endTurnWindow && isMyTurn
 
   return (
     <div
@@ -1365,6 +1276,7 @@ export function CucupolyView({
           bannerOpen={eventBanner !== null}
           canBuildNow={canBuildNow}
           onOpenProperties={openProperties}
+          onTrade={openTrade}
         />
 
         <NoticeTicker notice={noticeQueue.current} />
@@ -1376,7 +1288,7 @@ export function CucupolyView({
         ) : null}
       </header>
 
-      {acting && !animating && !turnPause ? (
+      {acting && !animating && !turnPause && !tradeVisible ? (
         <div className="cp-action-backdrop">
           <section
             className="cp-action-card"
@@ -1398,10 +1310,24 @@ export function CucupolyView({
               </div>
             </header>
             <fieldset className="cp-lock" disabled={locked}>
-              <ActionPanel state={state} me={me} dispatch={dispatch} />
+              <ActionPanel state={state} me={me} dispatch={dispatch} onTrade={openTrade} />
             </fieldset>
           </section>
         </div>
+      ) : null}
+
+      {composerOpen ? (
+        <TradeComposer
+          state={state}
+          me={me}
+          players={players}
+          dispatch={dispatch}
+          onClose={closeTrade}
+        />
+      ) : null}
+
+      {tradeVisible ? (
+        <TradeProposal state={state} me={me} players={players} dispatch={dispatch} />
       ) : null}
 
       {state.phase === 'twenty-one' && state.table21 && !animating ? (

@@ -93,6 +93,9 @@ function passTurn(state: CucupolyState, playerId: string): CucupolyState {
     phase: 'buy-decision',
     pendingBuy: 1,
     currentIndex: state.turnOrder.indexOf(playerId),
+    dice: null,
+    endTurnPending: false,
+    endTurnTicks: 0,
   }
   return reduce(staged, { type: 'decline' }, playerId) as CucupolyState
 }
@@ -747,6 +750,9 @@ describe('evento de dados y Sorpresa en la misma ronda', () => {
       ...after,
       phase: 'waiting-roll',
       currentIndex: 1,
+      dice: null,
+      endTurnPending: false,
+      endTurnTicks: 0,
       seed: seedForDie(2),
     }
     expect(getDiceCount(p2Turn)).toBe(3)
@@ -1244,6 +1250,147 @@ describe('habilidad Ser. Tel: Caída de red', () => {
       'p2',
     ) as CucupolyState
     expect(proposed.trade!.stage).toBe('pending')
+  })
+})
+
+describe('intercambio estilo Monopoly', () => {
+  it('abre la ventana tras tirar y no cambia de turno hasta Continuar', () => {
+    const state = fresh(TWO, 99)
+    state.owners[1] = 'p2'
+    state.positions.p1 = 0
+    state.currentIndex = 0
+    state.phase = 'waiting-roll'
+    state.seed = seedForDie(1)
+    state.activeEvent = activeEventFor('dados_uno', 1)
+
+    const rolled = reduce(state, { type: 'roll' }, 'p1') as CucupolyState
+    expect(rolled.endTurnPending).toBe(true)
+    expect(rolled.phase).toBe('waiting-roll')
+    expect(rolled.turnOrder[rolled.currentIndex]).toBe('p1')
+    expect(rolled.dice?.total).toBe(1)
+    // No se puede volver a tirar mientras la ventana sigue abierta.
+    expect(isGameError(reduce(rolled, { type: 'roll' }, 'p1'))).toBe(true)
+
+    const continued = reduce(rolled, { type: 'continue-turn' }, 'p1') as CucupolyState
+    expect(continued.endTurnPending).toBe(false)
+    expect(continued.phase).toBe('waiting-roll')
+    expect(continued.turnOrder[continued.currentIndex]).toBe('p2')
+    expect(continued.dice).toBeNull()
+  })
+
+  it('acepta fuera de turno, transfiere propiedades y dinero y aplica una sola vez', () => {
+    const state = fresh(TWO, 99)
+    state.owners[1] = 'p1'
+    state.owners[3] = 'p2'
+    state.currentIndex = 0
+    state.phase = 'waiting-roll'
+
+    const proposed = reduce(
+      state,
+      {
+        type: 'propose-trade',
+        payload: {
+          to: 'p2',
+          giveTiles: [1],
+          getTiles: [3],
+          giveMoney: 50,
+          getMoney: 0,
+        },
+      },
+      'p1',
+    ) as CucupolyState
+
+    expect(proposed.phase).toBe('trade')
+    expect(proposed.trade?.stage).toBe('pending')
+    // Beto acepta aunque el turno siga siendo de Ana.
+    const accepted = reduce(proposed, { type: 'accept-trade' }, 'p2') as CucupolyState
+
+    expect(accepted.trade).toBeNull()
+    expect(accepted.owners[1]).toBe('p2')
+    expect(accepted.owners[3]).toBe('p1')
+    expect(accepted.money.p1).toBe(RULES.startingMoney - 50)
+    expect(accepted.money.p2).toBe(RULES.startingMoney + 50)
+    expect(
+      accepted.notices.some((notice) =>
+        notice.text.includes('intercambiaron propiedades y dinero'),
+      ),
+    ).toBe(true)
+    // Segunda aceptación: el trato ya no existe y no se vuelve a aplicar.
+    expect(isGameError(reduce(accepted, { type: 'accept-trade' }, 'p2'))).toBe(true)
+  })
+
+  it('cancela y avisa si una propiedad ya no pertenece a quien la ofrece', () => {
+    const state = fresh(THREE, 99)
+    state.owners[1] = 'p1'
+    state.currentIndex = 0
+    state.phase = 'waiting-roll'
+
+    const proposed = reduce(
+      state,
+      {
+        type: 'propose-trade',
+        payload: { to: 'p2', giveTiles: [1], getTiles: [], giveMoney: 0, getMoney: 0 },
+      },
+      'p1',
+    ) as CucupolyState
+
+    // Simula un cambio de dueño entre la propuesta y la aceptación.
+    const stale: CucupolyState = {
+      ...proposed,
+      owners: { ...proposed.owners, 1: 'p3' },
+    }
+    const result = reduce(stale, { type: 'accept-trade' }, 'p2') as CucupolyState
+
+    expect(result.trade).toBeNull()
+    expect(result.phase).toBe('waiting-roll')
+    expect(result.owners[1]).toBe('p3')
+    expect(result.owners[3]).toBeUndefined()
+    expect(result.money.p1).toBe(RULES.startingMoney)
+    expect(result.notices.some((notice) => notice.text.includes('Trato cancelado'))).toBe(true)
+    expect(result.notices.some((notice) => notice.text.includes('ya no pertenece'))).toBe(true)
+  })
+
+  it('cancela y avisa si el dinero ya no alcanza', () => {
+    const state = fresh(TWO, 99)
+    state.currentIndex = 0
+    state.phase = 'waiting-roll'
+
+    const proposed = reduce(
+      state,
+      {
+        type: 'propose-trade',
+        payload: { to: 'p2', giveTiles: [], getTiles: [], giveMoney: 100, getMoney: 0 },
+      },
+      'p1',
+    ) as CucupolyState
+    const stale: CucupolyState = {
+      ...proposed,
+      money: { ...proposed.money, p1: 30 },
+    }
+    const result = reduce(stale, { type: 'accept-trade' }, 'p2') as CucupolyState
+
+    expect(result.trade).toBeNull()
+    expect(result.money.p1).toBe(30)
+    expect(result.money.p2).toBe(RULES.startingMoney)
+    expect(result.notices.some((notice) => notice.text.includes('dinero ofrecido'))).toBe(true)
+  })
+
+  it('el anfitrión cierra la ventana cuando se agota el tiempo', () => {
+    const state = fresh(TWO, 99)
+    const windowed: CucupolyState = {
+      ...state,
+      phase: 'waiting-roll',
+      currentIndex: 0,
+      dice: { values: [1], total: 1 },
+      endTurnPending: true,
+      endTurnTicks: 1,
+    }
+
+    const next = reduce(windowed, { type: 'end-turn-tick' }, 'p1') as CucupolyState
+    expect(next.endTurnPending).toBe(false)
+    expect(next.endTurnTicks).toBe(0)
+    expect(next.turnOrder[next.currentIndex]).toBe('p2')
+    expect(next.dice).toBeNull()
   })
 })
 
