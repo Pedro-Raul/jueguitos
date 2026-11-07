@@ -1,6 +1,7 @@
 import { createRoot } from 'react-dom/client'
 import App from './App'
 import './gameTheme.css'
+import './propertyCards.css'
 import './styles.css'
 
 // No StrictMode on purpose: it mounts effects twice in dev, which makes PeerJS

@@ -52,8 +52,10 @@ import {
 } from './timing'
 import { NoticeTicker, useNoticeQueue } from './NoticeTicker'
 import type { Notice } from './notices'
+import { PropertiesViewer } from './PropertiesViewer'
 import { RULES } from './rules.config'
 import { Table21Panel } from './Table21Panel'
+import { TurnActionBar } from './TurnActionBar'
 import { subscribeHostActions } from '../../net/hostActions'
 import {
   groupNameFor,
@@ -856,6 +858,7 @@ export function CucupolyView({
   const [eventBanner, setEventBanner] = useState<EventBannerData | null>(null)
   const [eventLeaving, setEventLeaving] = useState(false)
   const [turnPause, setTurnPause] = useState(false)
+  const [propertiesOpen, setPropertiesOpen] = useState(false)
   const seenRoll = useRef<SeenRoll | null>(null)
   // Se inicializan con la secuencia actual: al reconectar o entrar tarde no se
   // reproducen anuncios pasados, pero la etiqueta sigue leyendo `activeEvent`.
@@ -879,6 +882,11 @@ export function CucupolyView({
 
   const handleSelect = useCallback((index: number) => setSelected(index), [])
   const handleBusy = useCallback((value: boolean) => setBusy(value), [])
+  const openProperties = useCallback(() => {
+    setSelected(null)
+    setPropertiesOpen(true)
+  }, [])
+  const closeProperties = useCallback(() => setPropertiesOpen(false), [])
 
   const clearBannerTimers = useCallback(() => {
     if (bannerTimers.current.leave !== null) {
@@ -1219,6 +1227,9 @@ export function CucupolyView({
       : phaseHint(state)
   const locked = animating || turnPause
   const acting = mustAct(state, me.id)
+  // Marcador temporal: el siguiente paso conectará este booleano con las reglas
+  // reales de construcción. Por ahora no se consulta el reducer.
+  const canBuildNow = false
 
   return (
     <div
@@ -1346,6 +1357,16 @@ export function CucupolyView({
           <span className="cp-phase">{statusHint}</span>
         </div>
 
+        <TurnActionBar
+          state={state}
+          meId={me.id}
+          animating={animating}
+          turnPause={turnPause}
+          bannerOpen={eventBanner !== null}
+          canBuildNow={canBuildNow}
+          onOpenProperties={openProperties}
+        />
+
         <NoticeTicker notice={noticeQueue.current} />
 
         {(!acting || turnPause) && state.phase !== 'finished' ? (
@@ -1391,6 +1412,15 @@ export function CucupolyView({
           dispatch={dispatch}
           privateData={privateData}
           sendPrivate={sendPrivate}
+        />
+      ) : null}
+
+      {propertiesOpen ? (
+        <PropertiesViewer
+          state={state}
+          players={players}
+          meId={me.id}
+          onClose={closeProperties}
         />
       ) : null}
 
