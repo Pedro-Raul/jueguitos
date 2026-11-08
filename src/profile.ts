@@ -2,10 +2,29 @@ import type { Profile } from './types'
 
 const STORAGE_KEY = 'jueguitos.profile'
 
+/**
+ * Ficha ilustrada (no es un emoji del sistema). Se guarda como cadena en el
+ * perfil y se dibuja con el componente `Ficha`.
+ */
+export const CHILE_MORRON = ':chile-morron:'
+
 export const AVATAR_EMOJIS = [
   '🐶', '🐱', '🦊', '🐼', '🐧', '🐸', '🐵', '🦁', '🐯',
   '🐨', '🐙', '🦄', '🐝', '🦉', '🐢', '🐳', '🦖',
+  '🕊️', CHILE_MORRON,
 ]
+
+/** Texto plano para contextos sin imágenes, como un `<option>`. */
+export function fichaText(emoji: string): string {
+  return emoji === CHILE_MORRON ? '🫑' : emoji
+}
+
+/** Nombre accesible de una ficha. */
+export function fichaName(emoji: string): string {
+  if (emoji === CHILE_MORRON) return 'Chile morrón'
+  if (emoji === '🕊️') return 'Paloma'
+  return emoji
+}
 
 export const AVATAR_COLORS = [
   '#e63946', '#f4a261', '#e9c46a', '#2a9d8f',

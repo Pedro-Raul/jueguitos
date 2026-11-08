@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react'
-import { AVATAR_COLORS, AVATAR_EMOJIS, createProfile } from '../profile'
+import { Ficha } from '../components/Ficha'
+import { AVATAR_COLORS, AVATAR_EMOJIS, createProfile, fichaName } from '../profile'
 import type { Profile } from '../types'
 
 type Props = {
@@ -39,7 +40,7 @@ export function ProfileScreen({ initial, onSave, onDelete, onCancel }: Props) {
         <h2>{initial ? 'Editar perfil' : 'Crea tu perfil'}</h2>
 
         <div className="avatar-preview" style={{ backgroundColor: color }} aria-hidden="true">
-          {emoji}
+          <Ficha emoji={emoji} />
         </div>
 
         <label className="field">
@@ -55,18 +56,20 @@ export function ProfileScreen({ initial, onSave, onDelete, onCancel }: Props) {
         </label>
 
         <fieldset className="field">
-          <legend>Avatar</legend>
-          <div className="emoji-grid">
+          <legend>Ficha</legend>
+          <p className="muted small">Elige la ficha con la que te verán en la sala.</p>
+          <div className="emoji-grid" role="group" aria-label="Lobby de fichas">
             {AVATAR_EMOJIS.map((option) => (
               <button
                 key={option}
                 type="button"
                 className={`emoji-option${option === emoji ? ' is-selected' : ''}`}
                 aria-pressed={option === emoji}
-                aria-label={`Avatar ${option}`}
+                aria-label={`Ficha ${fichaName(option)}`}
+                title={`Ficha ${fichaName(option)}`}
                 onClick={() => setEmoji(option)}
               >
-                {option}
+                <Ficha emoji={option} />
               </button>
             ))}
           </div>

@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef } from 'react'
 import { useFrame } from '@react-three/fiber'
 import * as THREE from 'three'
+import { CHILE_MORRON } from '../../../profile'
 import type { Player } from '../../../types'
 import type { CucupolyState } from '../engine'
 import type { RollPlan } from '../planAnimations'
@@ -403,6 +404,57 @@ function Frog() {
   )
 }
 
+function ChileMorron() {
+  return (
+    <group>
+      {/* Cuerpo lobulado: la esfera ancha más el lóbulo inferior dan la silueta
+          de campana del pimiento morrón. */}
+      <mesh position={[0, 0.18, 0]} scale={[1.15, 0.95, 1.05]} castShadow>
+        <sphereGeometry args={[0.15, 18, 14]} />
+        <meshStandardMaterial color="#5AA64D" roughness={0.7} />
+      </mesh>
+      <mesh position={[0, 0.1, 0]} scale={[0.95, 0.7, 0.9]} castShadow>
+        <sphereGeometry args={[0.13, 16, 12]} />
+        <meshStandardMaterial color="#5AA64D" roughness={0.7} />
+      </mesh>
+      {/* Tallo y hoja. */}
+      <mesh position={[0.015, 0.35, -0.01]} rotation={[0, 0, -0.12]} castShadow>
+        <cylinderGeometry args={[0.02, 0.03, 0.09, 8]} />
+        <meshStandardMaterial color="#3F7D35" roughness={0.85} />
+      </mesh>
+      <mesh position={[0.075, 0.35, -0.02]} rotation={[0.3, 0, -0.7]} scale={[1, 0.35, 1]} castShadow>
+        <coneGeometry args={[0.05, 0.14, 8]} />
+        <meshStandardMaterial color="#7CC96B" roughness={0.8} />
+      </mesh>
+      {/* Ojos saltones. */}
+      {[-1, 1].map((side) => (
+        <mesh key={`eye-${side}`} position={[side * 0.06, 0.27, 0.115]} castShadow>
+          <sphereGeometry args={[0.045, 12, 10]} />
+          <meshStandardMaterial color="#FFFDF6" roughness={0.85} />
+        </mesh>
+      ))}
+      {[-1, 1].map((side) => (
+        <mesh key={`pupil-${side}`} position={[side * 0.06, 0.275, 0.155]}>
+          <sphereGeometry args={[0.021, 10, 8]} />
+          <meshStandardMaterial color="#1C1A16" />
+        </mesh>
+      ))}
+      {/* Sonrisa: medio toro girado para dibujar la curva inferior. */}
+      <mesh position={[0, 0.21, 0.155]} rotation={[0, 0, Math.PI]}>
+        <torusGeometry args={[0.04, 0.008, 6, 12, Math.PI]} />
+        <meshStandardMaterial color="#1C1A16" />
+      </mesh>
+      {/* Patitas. */}
+      {[-1, 1].map((side) => (
+        <mesh key={`leg-${side}`} position={[side * 0.09, 0.02, 0.04]} scale={[0.8, 0.7, 1]} castShadow>
+          <sphereGeometry args={[0.05, 10, 8]} />
+          <meshStandardMaterial color="#4A8A3D" roughness={0.8} />
+        </mesh>
+      ))}
+    </group>
+  )
+}
+
 function EmojiSprite({ emoji, y }: { emoji: string; y: number }) {
   const texture = useMemo(() => createEmojiTexture(emoji), [emoji])
   useEffect(() => () => texture.dispose(), [texture])
@@ -446,6 +498,8 @@ function TokenFigure({ emoji, color }: { emoji: string; color: string }) {
       return <Fox />
     case '🐸':
       return <Frog />
+    case CHILE_MORRON:
+      return <ChileMorron />
     default:
       return <Pawn color={color} emoji={emoji} />
   }

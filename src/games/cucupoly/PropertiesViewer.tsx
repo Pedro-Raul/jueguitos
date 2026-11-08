@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type MouseEvent } from 'react'
+import { Ficha } from '../../components/Ficha'
 import type { Player } from '../../types'
 import type { CucupolyState } from './engine'
 import { PropertyCard } from './PropertyCard'
@@ -106,7 +107,7 @@ export function PropertiesViewer({
                   style={{ backgroundColor: player?.color ?? '#999' }}
                   aria-hidden="true"
                 >
-                  {player?.emoji ?? '🙂'}
+                  <Ficha emoji={player?.emoji ?? '🙂'} />
                 </span>
                 <span className="cp-prop-player-name">
                   {nameOf(state, players, id)}

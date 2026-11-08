@@ -1,3 +1,4 @@
+import { Ficha } from '../components/Ficha'
 import { games } from '../games'
 import type { Profile } from '../types'
 
@@ -15,7 +16,7 @@ export function CatalogScreen({ profile, onHost, onJoin, onEditProfile }: Props)
         <span className="brand">Jueguitos</span>
         <button className="profile-chip" type="button" onClick={onEditProfile}>
           <span className="avatar" style={{ backgroundColor: profile.color }}>
-            {profile.emoji}
+            <Ficha emoji={profile.emoji} />
           </span>
           <span>{profile.name}</span>
         </button>

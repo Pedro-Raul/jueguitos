@@ -1,4 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
+import { Ficha } from '../../components/Ficha'
+import { fichaText } from '../../profile'
 import type { GameAction, GameViewProps, Player } from '../../types'
 import { BOARD } from './board'
 import {
@@ -31,6 +33,7 @@ import {
   markFinalEventSeen,
   purchasePriceFor,
 } from './events'
+import { AbilitiesPanel } from './AbilitiesPanel'
 import { ActiveEventPill, DiceEventMenu, EventBanner } from './EventHud'
 import { eventKey, type EventBannerData } from './eventUi'
 import {
@@ -521,6 +524,7 @@ function ActionPanel({ state, me, dispatch, onTrade }: PanelProps) {
       </div>
 
       <BuildPanel state={state} me={me} dispatch={dispatch} myMoney={myMoney} />
+      <AbilitiesPanel state={state} meId={me.id} dispatch={dispatch} />
     </div>
   )
 }
@@ -707,7 +711,7 @@ function TileSheet({
             <dt>Dueño</dt>
             <dd>
               {owner
-                ? `${owner.emoji} ${owner.name}`
+                ? `${fichaText(owner.emoji)} ${owner.name}`
                 : isPurchasable(tile)
                   ? 'Sin dueño'
                   : '—'}
@@ -1218,7 +1222,7 @@ export function CucupolyView({
                 className={`cp-pcard${id === current ? ' is-current' : ''}${out ? ' is-out' : ''}`}
               >
                 <span className="avatar" style={{ backgroundColor: player?.color ?? '#999' }}>
-                  {player?.emoji ?? '🙂'}
+                  <Ficha emoji={player?.emoji ?? '🙂'} />
                 </span>
                 <div className="cp-pinfo">
                   <span className="cp-pname">

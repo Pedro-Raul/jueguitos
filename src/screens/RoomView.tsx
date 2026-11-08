@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Ficha } from '../components/Ficha'
 import { getGame } from '../games'
 import type { GameAction, Player } from '../types'
 import type { RoomSnapshot } from '../net/protocol'
@@ -101,7 +102,7 @@ export function RoomView({
           {room.players.map((player) => (
             <li key={player.id} className={`player-row${player.connected ? '' : ' is-offline'}`}>
               <span className="avatar" style={{ backgroundColor: player.color }}>
-                {player.emoji}
+                <Ficha emoji={player.emoji} />
               </span>
               <span className="player-name">
                 {player.name}

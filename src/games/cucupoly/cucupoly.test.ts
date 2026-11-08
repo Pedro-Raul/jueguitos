@@ -1472,6 +1472,29 @@ describe('rondas de espera de las habilidades', () => {
       isGameError(reduce(state, { type: 'activate-ability', payload: { tileId: WATER_TILE } }, 'p1')),
     ).toBe(true)
   })
+
+  it('solo se activa antes de tirar, no en la ventana de fin de turno', () => {
+    const pending = fresh()
+    pending.owners[WATER_TILE] = 'p1'
+    pending.currentIndex = 0
+    pending.phase = 'waiting-roll'
+    pending.dice = { values: [1], total: 1 }
+    pending.endTurnPending = true
+    pending.endTurnTicks = 5
+
+    expect(
+      isGameError(
+        reduce(pending, { type: 'activate-ability', payload: { tileId: WATER_TILE } }, 'p1'),
+      ),
+    ).toBe(true)
+
+    const rolled = { ...pending, endTurnPending: false, endTurnTicks: 0 }
+    expect(
+      isGameError(
+        reduce(rolled, { type: 'activate-ability', payload: { tileId: WATER_TILE } }, 'p1'),
+      ),
+    ).toBe(true)
+  })
 })
 
 /** Mesa de 21 en fase de cartas, con las apuestas ya cobradas. */

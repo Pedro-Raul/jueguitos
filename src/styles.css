@@ -191,6 +191,17 @@ select:focus-visible {
   box-shadow: 0 0 0 3px var(--line), 0 10px 0 rgba(35, 33, 28, 0.12);
 }
 
+/* Fichas ilustradas: la imagen hereda el tamaño de fuente del avatar. */
+.ficha-img {
+  display: block;
+  width: 1em;
+  height: 1em;
+  object-fit: contain;
+  vertical-align: -0.12em;
+  pointer-events: none;
+  user-select: none;
+}
+
 .emoji-grid {
   display: grid;
   grid-template-columns: repeat(8, 1fr);
@@ -1417,6 +1428,99 @@ button {
   justify-content: space-between;
   gap: 10px;
 }
+
+/* Habilidades de los servicios */
+
+.cp-abilities summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cp-ability-badge {
+  margin-left: auto;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--primary);
+  color: #fff;
+  font-size: 0.6rem;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.cp-ability-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cp-ability {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 2px solid var(--line);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.cp-ability.is-active {
+  border-color: var(--primary);
+}
+
+.cp-ability-info {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.cp-ability-info strong {
+  font-size: 0.82rem;
+}
+
+.cp-ability-state {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 0.66rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-align: right;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.cp-ability .small-btn {
+  flex: none;
+  min-height: 32px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+@media (max-width: 520px) {
+  .cp-ability {
+    flex-wrap: wrap;
+  }
+
+  .cp-ability-info {
+    flex: 1 1 100%;
+  }
+
+  .cp-ability-state {
+    margin-left: 0;
+  }
+
+  .cp-ability .small-btn {
+    margin-left: auto;
+  }
+}
+
 
 /* Tarjeta de casilla */
 

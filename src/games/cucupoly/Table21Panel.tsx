@@ -5,6 +5,7 @@ import {
   useState,
   type CSSProperties,
 } from 'react'
+import { Ficha } from '../../components/Ficha'
 import type { GameAction, Player } from '../../types'
 import { subscribeHostActions } from '../../net/hostActions'
 import type { CucupolyState } from './engine'
@@ -404,7 +405,7 @@ export function Table21Panel({
                         className="avatar"
                         style={{ backgroundColor: player?.color ?? '#999' }}
                       >
-                        {player?.emoji ?? '🙂'}
+                        <Ficha emoji={player?.emoji ?? '🙂'} />
                       </span>
                       <span className="cp-table21-name">
                         {nameOf(state, id)}

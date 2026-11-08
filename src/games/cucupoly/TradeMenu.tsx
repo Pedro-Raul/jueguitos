@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, type MouseEvent } from 'react'
+import { Ficha } from '../../components/Ficha'
 import type { GameAction, Player } from '../../types'
 import { BOARD, type Tile } from './board'
 import type { CucupolyState } from './engine'
@@ -256,7 +257,7 @@ export function TradeComposer({
                     style={{ backgroundColor: player?.color ?? '#999' }}
                     aria-hidden="true"
                   >
-                    {player?.emoji ?? '🙂'}
+                    <Ficha emoji={player?.emoji ?? '🙂'} />
                   </span>
                   <span className="cp-prop-player-name">{nameOf(state, id)}</span>
                 </button>
