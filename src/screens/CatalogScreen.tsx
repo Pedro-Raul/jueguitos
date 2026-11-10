@@ -14,18 +14,48 @@ export function CatalogScreen({ profile, onHost, onJoin, onEditProfile }: Props)
     <main className="screen">
       <header className="topbar">
         <span className="brand">Jueguitos</span>
-        <button className="profile-chip" type="button" onClick={onEditProfile}>
+        <button
+          className="profile-chip"
+          type="button"
+          aria-label={`Editar el perfil de ${profile.name}`}
+          onClick={onEditProfile}
+        >
           <span className="avatar" style={{ backgroundColor: profile.color }}>
             <Ficha emoji={profile.emoji} />
           </span>
-          <span>{profile.name}</span>
+          <span className="profile-chip-name">{profile.name}</span>
         </button>
       </header>
 
-      <section className="hero">
+      <section className="hero hero-catalog">
+        <span className="eyebrow">Hola, {profile.name}</span>
         <h1>Elige un juego</h1>
         <p>Crea una sala y comparte el código. El anfitrión hace de servidor.</p>
       </section>
+
+      <ol className="quick-start" aria-label="Cómo empezar">
+        <li className="quick-step">
+          <span className="quick-step-number" aria-hidden="true">1</span>
+          <span>
+            <strong>Crea una sala</strong>
+            <span className="muted small">Elige un juego del catálogo.</span>
+          </span>
+        </li>
+        <li className="quick-step">
+          <span className="quick-step-number" aria-hidden="true">2</span>
+          <span>
+            <strong>Comparte el código</strong>
+            <span className="muted small">Tus amigos entran con 5 caracteres.</span>
+          </span>
+        </li>
+        <li className="quick-step">
+          <span className="quick-step-number" aria-hidden="true">3</span>
+          <span>
+            <strong>Juega con tus amigos</strong>
+            <span className="muted small">El anfitrión inicia la partida.</span>
+          </span>
+        </li>
+      </ol>
 
       <div className="actions actions-center">
         <button className="primary" type="button" onClick={onJoin}>

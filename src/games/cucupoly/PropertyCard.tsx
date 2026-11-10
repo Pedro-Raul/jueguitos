@@ -41,7 +41,7 @@ const TYPE_LABELS: Record<Tile['type'], string> = {
   parking: 'Estacionamiento',
   'go-to-jail': 'Ir a la cárcel',
   park: 'Parque',
-  betting: 'Apuestas',
+  betting: 'Tragamonedas',
 }
 
 /**

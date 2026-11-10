@@ -20,6 +20,35 @@
   box-sizing: border-box;
 }
 
+button,
+a,
+[role='button'],
+input,
+select {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button:focus-visible,
+a:focus-visible,
+[role='button']:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 3px solid rgba(47, 122, 82, 0.5);
+  outline-offset: 2px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 html,
 body,
 #root {
@@ -98,6 +127,22 @@ body {
   max-width: 46ch;
 }
 
+.eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  color: var(--primary-dark);
+  font-size: 0.72rem;
+  font-weight: 850;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.hero-catalog .eyebrow {
+  margin-bottom: 8px;
+}
+
 /* ---------- Superficies ---------- */
 
 .card {
@@ -109,6 +154,12 @@ body {
   flex-direction: column;
   gap: 14px;
   box-shadow: var(--hard);
+}
+
+.card-narrow {
+  width: 100%;
+  max-width: 440px;
+  margin-inline: auto;
 }
 
 .card h1,
@@ -136,7 +187,7 @@ body {
   margin: 0;
 }
 
-.field > span,
+.field > span:first-child,
 .field legend {
   font-size: 0.72rem;
   font-weight: 800;
@@ -144,6 +195,32 @@ body {
   text-transform: uppercase;
   color: var(--muted);
   padding: 0;
+}
+
+.field-label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.field-count {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--muted);
+}
+
+.field-help {
+  font-size: 0.8rem;
+  line-height: 1.35;
+  color: var(--muted);
+}
+
+.field-help.is-valid {
+  color: var(--primary-dark);
+  font-weight: 700;
 }
 
 input[type='text'],
@@ -177,18 +254,43 @@ select:focus-visible {
   background: var(--surface-2);
 }
 
+.code-input.is-valid {
+  border-color: var(--primary);
+  background: #f0f7f2;
+}
+
 /* ---------- Perfil ---------- */
+
+.avatar-showcase {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
 
 .avatar-preview {
   align-self: center;
-  width: 108px;
-  height: 108px;
+  width: clamp(96px, 20vw, 118px);
+  height: clamp(96px, 20vw, 118px);
   border-radius: 50%;
   display: grid;
   place-items: center;
-  font-size: 3.4rem;
+  font-size: clamp(3rem, 7vw, 3.4rem);
   border: 6px solid #fff;
   box-shadow: 0 0 0 3px var(--line), 0 10px 0 rgba(35, 33, 28, 0.12);
+}
+
+.avatar-caption {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  text-align: center;
+}
+
+.avatar-caption strong {
+  font-size: 0.95rem;
 }
 
 /* Fichas ilustradas: la imagen hereda el tamaño de fuente del avatar. */
@@ -204,19 +306,26 @@ select:focus-visible {
 
 .emoji-grid {
   display: grid;
-  grid-template-columns: repeat(8, 1fr);
+  grid-template-columns: repeat(auto-fill, minmax(48px, 1fr));
   gap: 8px;
 }
 
 .emoji-option {
-  font-size: 1.5rem;
-  padding: 8px 0;
+  display: grid;
+  place-items: center;
+  min-height: 48px;
+  font-size: 1.55rem;
+  padding: 6px 0;
   border-radius: 12px;
   border: 2px solid var(--line);
   background: var(--surface-2);
   cursor: pointer;
   box-shadow: 0 3px 0 rgba(35, 33, 28, 0.08);
-  transition: transform 0.08s ease, box-shadow 0.08s ease;
+  transition: transform 0.08s ease, box-shadow 0.08s ease, background 0.15s ease;
+}
+
+.emoji-option:hover:not(.is-selected) {
+  background: #f2ead8;
 }
 
 .emoji-option:active {
@@ -375,6 +484,57 @@ button {
   margin: 0;
 }
 
+/* ---------- Cómo empezar ---------- */
+
+.quick-start {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.quick-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px;
+  border: 2px solid var(--line);
+  border-radius: 16px;
+  background: rgba(255, 253, 246, 0.72);
+}
+
+.quick-step-number {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  background: var(--primary);
+  color: #fff;
+  font-size: 0.8rem;
+  font-weight: 900;
+  box-shadow: 0 3px 0 var(--primary-dark);
+}
+
+.quick-step > span:last-child {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.quick-step strong {
+  font-size: 0.86rem;
+}
+
+.quick-step .small {
+  font-size: 0.76rem;
+  line-height: 1.3;
+}
+
 .alert {
   margin: 0;
   background: #fdecea;
@@ -453,6 +613,13 @@ button {
   box-shadow: 0 4px 0 rgba(35, 33, 28, 0.09);
 }
 
+.profile-chip-name {
+  max-width: min(28ch, 44vw);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .profile-chip:active {
   transform: translateY(3px);
   box-shadow: 0 1px 0 rgba(35, 33, 28, 0.09);
@@ -489,6 +656,38 @@ button {
   text-indent: 0.28em;
   color: var(--primary-dark);
   text-shadow: 0 4px 0 rgba(47, 122, 82, 0.18);
+}
+
+.room-ticket-status {
+  margin: 0;
+  min-height: 1.2em;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.room-ticket-status.is-copied {
+  color: var(--primary-dark);
+  font-weight: 700;
+}
+
+.connecting-card {
+  align-items: center;
+  text-align: center;
+}
+
+.spinner {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  border: 4px solid rgba(47, 122, 82, 0.18);
+  border-top-color: var(--primary);
+  animation: ui-spin 0.9s linear infinite;
+}
+
+@keyframes ui-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .room-code {
@@ -528,6 +727,13 @@ button {
 .player-name,
 .score-name {
   font-weight: 750;
+}
+
+.player-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .player-tag {
@@ -1924,6 +2130,419 @@ button {
   }
 }
 
+/* ---------- Tragamonedas del Sitio de apuestas ---------- */
+
+.cp-slot-backdrop {
+  place-items: center;
+  padding: 12px;
+}
+
+.cp-slot {
+  width: min(100%, 640px);
+  max-height: min(88dvh, 780px);
+  gap: 10px;
+  overflow-y: auto;
+  background:
+    radial-gradient(circle at 50% 0%, rgba(255, 214, 102, 0.28), transparent 45%),
+    var(--surface);
+}
+
+.cp-slot-head {
+  align-items: center;
+}
+
+.cp-slot-badge {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 52px;
+  height: 52px;
+  border-radius: 14px;
+  background: linear-gradient(160deg, #2b1c4d, #160f2c);
+  border: 2px solid #e9c46a;
+  font-size: 1.7rem;
+  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.12), 0 4px 0 rgba(0, 0, 0, 0.25);
+}
+
+.cp-slot-titles {
+  min-width: 0;
+}
+
+.cp-slot-titles h2 {
+  margin: 2px 0 0;
+  font-size: 1.15rem;
+  font-weight: 900;
+  letter-spacing: -0.01em;
+}
+
+.cp-slot-wallet {
+  margin-left: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+  padding: 6px 12px;
+  border-radius: 14px;
+  border: 2px solid #e9c46a;
+  background: #fff6dd;
+  white-space: nowrap;
+}
+
+.cp-slot-wallet-label {
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #8a5a00;
+}
+
+.cp-slot-wallet strong {
+  font-size: 1.05rem;
+  font-variant-numeric: tabular-nums;
+  color: #5b3d00;
+}
+
+.cp-slot-cabinet {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 20px;
+  border: 3px solid #e9c46a;
+  background:
+    radial-gradient(circle at 50% -30%, rgba(255, 255, 255, 0.22), transparent 55%),
+    linear-gradient(180deg, #2b1c4d, #140e26);
+  box-shadow: inset 0 0 0 3px #0b0716, 0 8px 0 rgba(0, 0, 0, 0.28);
+  overflow: hidden;
+}
+
+.cp-slot-marquee {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #7a1f3d, #b3375a, #7a1f3d);
+  border: 2px solid #ffd166;
+  box-shadow: inset 0 0 12px rgba(0, 0, 0, 0.35);
+}
+
+.cp-slot-marquee-text {
+  font-size: 0.68rem;
+  font-weight: 900;
+  letter-spacing: 0.24em;
+  color: #ffe9b8;
+  text-shadow: 0 2px 0 rgba(0, 0, 0, 0.35);
+}
+
+.cp-slot-lights {
+  display: inline-flex;
+  gap: 5px;
+}
+
+.cp-slot-lights i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #ffe9b8;
+  box-shadow: 0 0 6px #ffd166;
+  animation: cp-slot-light 1.1s ease-in-out infinite;
+}
+
+.cp-slot-lights i:nth-child(2n) {
+  animation-delay: 180ms;
+}
+
+.cp-slot-lights i:nth-child(3n) {
+  animation-delay: 360ms;
+}
+
+.cp-slot-window {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 10px;
+  border-radius: 16px;
+  background: linear-gradient(180deg, #0f0a1d, #22183c);
+  border: 2px solid #4b3a74;
+  box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.5);
+}
+
+.cp-slot-payline {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  top: 50%;
+  height: 3px;
+  transform: translateY(-50%);
+  background: linear-gradient(90deg, transparent, rgba(255, 93, 115, 0.85), transparent);
+  pointer-events: none;
+  opacity: 0.65;
+}
+
+.cp-slot-reel {
+  position: relative;
+  display: grid;
+  place-items: center;
+  aspect-ratio: 1 / 1.08;
+  min-width: 0;
+  border-radius: 12px;
+  border: 2px solid #d8c9a5;
+  background:
+    linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.16),
+      transparent 18%,
+      transparent 82%,
+      rgba(0, 0, 0, 0.22)
+    ),
+    #fdf8ec;
+  box-shadow: inset 0 0 14px rgba(0, 0, 0, 0.18);
+  overflow: hidden;
+}
+
+.cp-slot-reel-symbol {
+  display: block;
+  font-size: clamp(2.1rem, 8vw, 3.2rem);
+  line-height: 1;
+  filter: drop-shadow(0 3px 0 rgba(0, 0, 0, 0.16));
+  animation: cp-slot-pop 260ms ease-out both;
+}
+
+.cp-slot.is-spinning .cp-slot-reel-symbol {
+  animation: cp-slot-roll 140ms linear infinite;
+}
+
+.cp-slot.is-win .cp-slot-reel {
+  border-color: #e9c46a;
+  box-shadow:
+    inset 0 0 14px rgba(0, 0, 0, 0.18),
+    0 0 0 3px rgba(233, 196, 106, 0.42),
+    0 0 18px rgba(255, 209, 102, 0.35);
+}
+
+.cp-slot.is-jackpot .cp-slot-cabinet {
+  animation: cp-slot-jackpot 900ms ease-in-out 2;
+}
+
+.cp-slot-message {
+  margin: 0;
+  min-height: 1.4em;
+  text-align: center;
+  font-size: 0.92rem;
+  font-weight: 800;
+  color: #f4e9c8;
+}
+
+.cp-slot.is-win .cp-slot-message {
+  color: #ffe08a;
+}
+
+.cp-slot-sparks {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.cp-slot-sparks span {
+  position: absolute;
+  top: 42%;
+  left: calc(9% + var(--cp-slot-i) * 13%);
+  font-size: 1.1rem;
+  animation: cp-slot-spark 900ms ease-out both;
+  animation-delay: calc(var(--cp-slot-i) * 55ms);
+}
+
+.cp-slot-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.cp-slot-bets {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.cp-slot-chip {
+  padding: 10px 6px;
+  border-radius: 14px;
+  border: 2px solid var(--line);
+  background: var(--surface);
+  color: inherit;
+  font-size: 1rem;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+  box-shadow: 0 4px 0 rgba(35, 33, 28, 0.1);
+  transition: transform 0.08s ease, box-shadow 0.08s ease, background 0.15s ease;
+}
+
+.cp-slot-chip:active:not(:disabled) {
+  transform: translateY(3px);
+  box-shadow: 0 1px 0 rgba(35, 33, 28, 0.1);
+}
+
+.cp-slot-chip.is-selected {
+  border-color: var(--primary);
+  background: #e6f1e8;
+  box-shadow: 0 0 0 3px rgba(47, 122, 82, 0.2), 0 4px 0 rgba(35, 33, 28, 0.1);
+}
+
+.cp-slot-chip:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+.cp-slot-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.cp-slot-spin {
+  flex: 1 1 auto;
+  font-size: 1rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.cp-slot-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.35;
+}
+
+.cp-slot-waiting {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 2px dashed var(--line);
+  background: var(--surface-2);
+}
+
+.cp-slot-waiting p {
+  margin: 0;
+  min-width: 0;
+  font-size: 0.86rem;
+}
+
+.cp-slot-waiting button {
+  margin-left: auto;
+}
+
+.cp-slot-paytable {
+  border-top: 2px dashed var(--line);
+  padding-top: 8px;
+  font-size: 0.8rem;
+}
+
+.cp-slot-paytable summary {
+  cursor: pointer;
+  font-weight: 850;
+  color: var(--primary-dark);
+  padding: 2px 0;
+}
+
+.cp-slot-paytable ul {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 4px 12px;
+}
+
+.cp-slot-paytable li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+
+.cp-slot-paytable li strong {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.cp-slot-prize-symbols {
+  font-size: 0.92rem;
+  letter-spacing: 0.02em;
+}
+
+@keyframes cp-slot-light {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.85);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes cp-slot-pop {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.8);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes cp-slot-roll {
+  0% {
+    opacity: 0.45;
+    transform: translateY(-28%);
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0.45;
+    transform: translateY(28%);
+  }
+}
+
+@keyframes cp-slot-jackpot {
+  0%,
+  100% {
+    box-shadow: inset 0 0 0 3px #0b0716, 0 8px 0 rgba(0, 0, 0, 0.28);
+  }
+  50% {
+    box-shadow:
+      inset 0 0 0 3px #0b0716,
+      0 8px 0 rgba(0, 0, 0, 0.28),
+      0 0 0 4px rgba(255, 209, 102, 0.55),
+      0 0 30px rgba(255, 209, 102, 0.55);
+  }
+}
+
+@keyframes cp-slot-spark {
+  0% {
+    opacity: 0;
+    transform: translateY(10px) scale(0.6) rotate(-10deg);
+  }
+  20% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-70px) scale(1.15) rotate(12deg);
+  }
+}
+
 /* ---------- Responsive ---------- */
 
 @media (max-width: 760px) {
@@ -1972,12 +2591,26 @@ button {
     padding: 14px 12px 48px;
   }
 
-  .emoji-grid {
-    grid-template-columns: repeat(6, 1fr);
+  .card {
+    padding: 14px;
+  }
+
+  .card-narrow {
+    max-width: none;
+  }
+
+  .quick-start {
+    grid-template-columns: 1fr;
+  }
+
+  .profile-chip-name {
+    max-width: 34vw;
   }
 
   .room-ticket strong {
     font-size: 2.4rem;
+    letter-spacing: 0.22em;
+    text-indent: 0.22em;
   }
 }
 
@@ -2045,7 +2678,36 @@ button {
     max-height: 46dvh;
   }
 
+  .cp-slot {
+    max-height: min(90dvh, 780px);
+  }
+
+  .cp-slot-bets {
+    gap: 6px;
+  }
+
+  .cp-slot-chip {
+    padding: 9px 4px;
+    font-size: 0.92rem;
+  }
+
   .cp-sheet-backdrop {
     left: var(--cp-rail);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .spinner {
+    animation-duration: 1.6s !important;
+    animation-iteration-count: infinite !important;
   }
 }

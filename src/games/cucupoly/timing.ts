@@ -52,6 +52,11 @@ export const TABLE21_DEAL_MS = paced(420)
 /** Conteo ascendente de la suma al revelar la mesa de 21. */
 export const TABLE21_COUNT_MS = paced(600)
 
+/** Giro de la tragamonedas: los rodillos giran hasta que el anfitrión resuelve. */
+export const SLOT_SPIN_MS = paced(1700)
+/** Cambio de símbolo durante el giro (animación, no regla). */
+export const SLOT_FLICKER_MS = 90
+
 /** Tiempo que se muestra el orden final antes de empezar la ronda 1. */
 export const TURN_ORDER_REVEAL_MS = paced(4000)
 /** Anuncio del evento inicial: tiempo completo y salida animada. */

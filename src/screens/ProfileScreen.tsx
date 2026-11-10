@@ -1,6 +1,12 @@
 import { useState, type FormEvent } from 'react'
 import { Ficha } from '../components/Ficha'
-import { AVATAR_COLORS, AVATAR_EMOJIS, createProfile, fichaName } from '../profile'
+import {
+  AVATAR_COLORS,
+  AVATAR_EMOJIS,
+  colorName,
+  createProfile,
+  fichaName,
+} from '../profile'
 import type { Profile } from '../types'
 
 type Props = {
@@ -39,20 +45,37 @@ export function ProfileScreen({ initial, onSave, onDelete, onCancel }: Props) {
       <form className="card" onSubmit={handleSubmit}>
         <h2>{initial ? 'Editar perfil' : 'Crea tu perfil'}</h2>
 
-        <div className="avatar-preview" style={{ backgroundColor: color }} aria-hidden="true">
-          <Ficha emoji={emoji} />
+        <div className="avatar-showcase">
+          <div className="avatar-preview" style={{ backgroundColor: color }} aria-hidden="true">
+            <Ficha emoji={emoji} />
+          </div>
+          <p className="avatar-caption">
+            <strong>{fichaName(emoji)}</strong>
+            <span className="muted small">{colorName(color)}</span>
+          </p>
         </div>
 
         <label className="field">
-          <span>Nombre</span>
+          <span className="field-label" id="name-label">
+            <span>Nombre</span>
+            <span className="field-count" aria-hidden="true">
+              {name.length}/24
+            </span>
+          </span>
           <input
             type="text"
             value={name}
             maxLength={24}
             autoComplete="nickname"
+            autoFocus={!initial}
             placeholder="Tu nombre"
+            aria-labelledby="name-label"
+            aria-describedby="name-hint"
             onChange={(event) => setName(event.target.value)}
           />
+          <span id="name-hint" className="muted small">
+            Así te verán los demás jugadores.
+          </span>
         </label>
 
         <fieldset className="field">
@@ -85,7 +108,8 @@ export function ProfileScreen({ initial, onSave, onDelete, onCancel }: Props) {
                 className={`color-option${option === color ? ' is-selected' : ''}`}
                 style={{ backgroundColor: option }}
                 aria-pressed={option === color}
-                aria-label={`Color ${option}`}
+                aria-label={`Color ${colorName(option)}`}
+                title={`Color ${colorName(option)}`}
                 onClick={() => setColor(option)}
               />
             ))}

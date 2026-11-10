@@ -31,6 +31,22 @@ export const AVATAR_COLORS = [
   '#457b9d', '#6d597a', '#ff6b6b', '#3a86ff',
 ]
 
+/** Nombre legible de cada color para etiquetas accesibles. */
+const AVATAR_COLOR_NAMES: Record<string, string> = {
+  '#e63946': 'Rojo',
+  '#f4a261': 'Naranja',
+  '#e9c46a': 'Amarillo',
+  '#2a9d8f': 'Verde azulado',
+  '#457b9d': 'Azul',
+  '#6d597a': 'Morado',
+  '#ff6b6b': 'Coral',
+  '#3a86ff': 'Azul intenso',
+}
+
+export function colorName(color: string): string {
+  return AVATAR_COLOR_NAMES[color.toLowerCase()] ?? color
+}
+
 function isProfile(value: unknown): value is Profile {
   if (typeof value !== 'object' || value === null) return false
   const candidate = value as Record<string, unknown>

@@ -3,6 +3,7 @@ import {
   AVATAR_COLORS,
   AVATAR_EMOJIS,
   CHILE_MORRON,
+  colorName,
   fichaName,
   fichaText,
 } from './profile'
@@ -29,5 +30,11 @@ describe('lobby de fichas', () => {
     expect(fichaName(CHILE_MORRON)).toBe('Chile morrón')
     expect(fichaName('🕊️')).toBe('Paloma')
     expect(fichaName('🦊')).toBe('🦊')
+  })
+
+  it('da un nombre legible a cada color', () => {
+    expect(colorName('#e63946')).toBe('Rojo')
+    expect(colorName('#3A86FF')).toBe('Azul intenso')
+    expect(colorName('#123456')).toBe('#123456')
   })
 })

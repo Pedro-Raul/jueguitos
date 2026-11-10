@@ -57,6 +57,15 @@ import {
   table21Transfers,
   type Table21Settlement,
 } from './table21'
+import {
+  SLOT_BETS,
+  SLOT_MAX_BET,
+  SLOT_MIN_BET,
+  slotPayout,
+  spinSlotReels,
+  type SlotReels,
+  type SlotState,
+} from './slot'
 import { END_TURN_TICKS } from './timing'
 
 export type Phase =
@@ -68,6 +77,7 @@ export type Phase =
   | 'buy-decision'
   | 'auction'
   | 'twenty-one'
+  | 'slots'
   | 'trade'
   | 'bus-move'
   | 'finished'
@@ -204,6 +214,7 @@ export type CucupolyState = {
   pendingBus: number | null
   auction: AuctionState | null
   table21: Table21State | null
+  slot: SlotState | null
   trade: TradeState | null
   /**
    * Ventana posterior a la tirada: el jugador aún puede intercambiar y debe
@@ -409,6 +420,14 @@ function cloneState(source: CucupolyState): CucupolyState {
             : null,
         }
       : null,
+    slot: source.slot
+      ? {
+          ...source.slot,
+          reels: source.slot.reels
+            ? ([...source.slot.reels] as SlotReels)
+            : null,
+        }
+      : null,
     trade: source.trade
       ? {
           ...source.trade,
@@ -445,6 +464,7 @@ function finishGame(state: CucupolyState, remaining: readonly string[]): void {
   state.pendingBus = null
   state.trade = null
   state.table21 = null
+  state.slot = null
   state.auction = null
   state.endTurnPending = false
   state.endTurnTicks = 0
@@ -476,6 +496,7 @@ function endTurn(state: CucupolyState, rollerId: string = currentId(state)): voi
     state.pendingBus = null
     state.trade = null
     state.table21 = null
+    state.slot = null
     state.auction = null
     return
   }
@@ -501,6 +522,7 @@ function advanceTurn(state: CucupolyState): void {
   state.pendingBus = null
   state.trade = null
   state.table21 = null
+  state.slot = null
   state.auction = null
 
   const size = state.turnOrder.length
@@ -786,6 +808,7 @@ export function init(players: Player[], seed: number): CucupolyState {
     pendingBus: null,
     auction: null,
     table21: null,
+    slot: null,
     trade: null,
     endTurnPending: false,
     endTurnTicks: 0,
@@ -873,6 +896,12 @@ export function reduce(
       return handleRevealTable(state, playerId, action.payload)
     case 'settle-table':
       return handleSettleTable(state, playerId)
+    case 'spin-slot':
+      return handleSpinSlot(state, playerId, action.payload)
+    case 'settle-slot':
+      return handleSettleSlot(state, playerId)
+    case 'leave-slot':
+      return handleLeaveSlot(state, playerId)
     case 'bus-move':
       return handleBusMove(state, playerId)
     case 'skip-bus-move':
@@ -1149,6 +1178,41 @@ function handleLanding(
         `Cárcel: ${state.names[playerId]} fue enviado a la cárcel; pierde hasta ${RULES.jailTurns} turnos o paga $${RULES.jailFine} de fianza.`,
       )
       endTurn(state, playerId)
+      return state
+    }
+    case 'betting': {
+      const available = state.money[playerId] ?? 0
+      if (available < SLOT_MIN_BET) {
+        pushLog(
+          state,
+          `${state.names[playerId]} llega al Sitio de apuestas sin saldo para jugar.`,
+        )
+        ruleNotice(
+          state,
+          `Sitio de apuestas: ${state.names[playerId]} no tiene el mínimo de $${SLOT_MIN_BET}; el turno termina.`,
+        )
+        endTurn(state, playerId)
+        return state
+      }
+
+      state.slot = {
+        playerId,
+        stage: 'bet',
+        bet: 0,
+        reels: null,
+        payout: 0,
+        multiplier: 0,
+        spinSeq: 0,
+      }
+      state.phase = 'slots'
+      pushLog(
+        state,
+        `${state.names[playerId]} llega al Sitio de apuestas y prueba la tragamonedas.`,
+      )
+      ruleNotice(
+        state,
+        `Sitio de apuestas: ${state.names[playerId]} juega a la tragamonedas. Apuesta de $${SLOT_MIN_BET} a $${SLOT_MAX_BET} y busca tres iguales.`,
+      )
       return state
     }
     default: {
@@ -2286,6 +2350,113 @@ function handleSettleTable(
 
   state.table21 = null
   endTurn(state)
+  return state
+}
+
+/**
+ * Pide un giro de la tragamonedas. La apuesta se cobra de inmediato y los
+ * rodillos quedan girando hasta que el anfitrión llama a `settle-slot`.
+ */
+function handleSpinSlot(
+  state: CucupolyState,
+  playerId: string,
+  payload: unknown,
+): CucupolyState | { error: string } {
+  if (state.phase !== 'slots' || !state.slot) return { error: 'No hay tragamonedas abierta.' }
+  const slot = state.slot
+  if (slot.playerId !== playerId) return { error: 'No estás jugando la tragamonedas.' }
+  if (slot.stage === 'spinning') return { error: 'Los rodillos ya están girando.' }
+
+  const bet = readInt(payload, 'bet')
+  if (bet === null || !SLOT_BETS.some((amount) => amount === bet)) {
+    return { error: `La apuesta debe ser una de: ${SLOT_BETS.join(', ')}.` }
+  }
+  if (bet > SLOT_MAX_BET) return { error: `La apuesta máxima es $${SLOT_MAX_BET}.` }
+  if (!spend(state, playerId, bet)) return { error: 'No tienes ese dinero.' }
+
+  slot.bet = bet
+  slot.reels = null
+  slot.payout = 0
+  slot.multiplier = 0
+  slot.stage = 'spinning'
+  slot.spinSeq += 1
+  pushLog(
+    state,
+    `${state.names[playerId]} apuesta $${bet} y gira los rodillos del Sitio de apuestas.`,
+  )
+  return state
+}
+
+/**
+ * Resuelve el giro con el RNG sembrado. Solo el anfitrión lo hace: los
+ * invitados ven la animación, pero el resultado se decide una sola vez.
+ */
+function handleSettleSlot(
+  state: CucupolyState,
+  playerId: string,
+): CucupolyState | { error: string } {
+  if (state.phase !== 'slots' || !state.slot) return { error: 'No hay tragamonedas abierta.' }
+  const slot = state.slot
+  if (slot.stage !== 'spinning') return { error: 'Los rodillos no están girando.' }
+  if (playerId !== state.order[0]) return { error: 'Solo el anfitrión resuelve la tragamonedas.' }
+
+  const reels = spinSlotReels((min, max) => randomInt(state, min, max))
+  const outcome = slotPayout(reels, slot.bet)
+  slot.reels = reels
+  slot.multiplier = outcome.multiplier
+  slot.payout = outcome.payout
+  slot.stage = 'result'
+
+  if (outcome.payout > 0) {
+    credit(state, slot.playerId, outcome.payout)
+    moneyNotice(
+      state,
+      null,
+      slot.playerId,
+      outcome.payout,
+      'premio de la tragamonedas',
+    )
+  }
+
+  pushLog(
+    state,
+    `Tragamonedas: ${state.names[slot.playerId]} saca ${outcome.label} y ${
+      outcome.payout > 0 ? `cobra $${outcome.payout}` : 'no cobra'
+    }.`,
+  )
+  if (outcome.multiplier >= 25) {
+    eventNotice(
+      state,
+      `¡Tragamonedas! ${state.names[slot.playerId]} saca ${outcome.label} y gana $${outcome.payout} (×${outcome.multiplier}).`,
+    )
+  } else if (outcome.payout > 0 && outcome.multiplier > 1) {
+    ruleNotice(
+      state,
+      `Tragamonedas: ${state.names[slot.playerId]} gana $${outcome.payout} con ${outcome.label.toLowerCase()} (×${outcome.multiplier}).`,
+    )
+  }
+  return state
+}
+
+/**
+ * Cierra la máquina y devuelve el turno. El anfitrión puede hacerlo por un
+ * jugador desconectado para que la partida no quede atascada.
+ */
+function handleLeaveSlot(
+  state: CucupolyState,
+  playerId: string,
+): CucupolyState | { error: string } {
+  if (state.phase !== 'slots' || !state.slot) return { error: 'No hay tragamonedas abierta.' }
+  const slot = state.slot
+  if (slot.stage === 'spinning') return { error: 'Espera a que se detengan los rodillos.' }
+  if (playerId !== slot.playerId && playerId !== state.order[0]) {
+    return { error: 'Solo el jugador o el anfitrión pueden cerrar la tragamonedas.' }
+  }
+
+  const leaving = slot.playerId
+  state.slot = null
+  pushLog(state, `${state.names[leaving]} se retira del Sitio de apuestas.`)
+  endTurn(state, leaving)
   return state
 }
 

@@ -33,6 +33,7 @@ export function RoomView({
   const [copyError, setCopyError] = useState<string | null>(null)
 
   const connectedCount = room.players.filter((player) => player.connected).length
+  const hostId = room.players[0]?.id
   const game = getGame(room.gameId)
 
   async function copyCode() {
@@ -49,8 +50,16 @@ export function RoomView({
   if (room.status === 'playing') {
     return (
       <main className="game-full">
-        {error ? <p className="alert game-alert">{error}</p> : null}
-        {notice ? <p className="alert game-alert">{notice}</p> : null}
+        {error ? (
+          <p className="alert game-alert" role="alert">
+            {error}
+          </p>
+        ) : null}
+        {notice ? (
+          <p className="alert game-alert" role="status">
+            {notice}
+          </p>
+        ) : null}
         {game ? (
           <game.View
             state={room.state}
@@ -82,8 +91,16 @@ export function RoomView({
         </button>
       </header>
 
-      {error ? <p className="alert">{error}</p> : null}
-      {notice ? <p className="alert">{notice}</p> : null}
+      {error ? (
+        <p className="alert" role="alert">
+          {error}
+        </p>
+      ) : null}
+      {notice ? (
+        <p className="alert" role="status">
+          {notice}
+        </p>
+      ) : null}
 
       <section className="card room-ticket">
         <span className="muted small">Comparte este código</span>
@@ -91,13 +108,20 @@ export function RoomView({
         <button className="primary" type="button" onClick={copyCode}>
           {copied ? '¡Copiado!' : 'Copiar código'}
         </button>
-        {copyError ? <p className="muted small">{copyError}</p> : null}
+        <p className={`room-ticket-status${copied ? ' is-copied' : ''}`} role="status" aria-live="polite">
+          {copied
+            ? '✓ Código copiado al portapapeles'
+            : copyError ?? 'Tus amigos lo escriben en «Unirse con código».'}
+        </p>
       </section>
 
       <section className="card">
         <h2>
           Jugadores ({room.players.length}/{room.maxPlayers})
         </h2>
+        <p className="muted small">
+          {connectedCount} de {room.players.length} conectados
+        </p>
         <ul className="player-list">
           {room.players.map((player) => (
             <li key={player.id} className={`player-row${player.connected ? '' : ' is-offline'}`}>
@@ -109,7 +133,7 @@ export function RoomView({
                 {player.id === me.id ? ' (tú)' : ''}
               </span>
               <span className="player-tag">
-                {!player.connected ? 'desconectado' : player.id === room.players[0]?.id ? 'anfitrión' : ''}
+                {!player.connected ? 'desconectado' : player.id === hostId ? 'anfitrión' : ''}
               </span>
             </li>
           ))}

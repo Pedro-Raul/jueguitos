@@ -58,6 +58,7 @@ import type { Notice } from './notices'
 import { PropertiesViewer } from './PropertiesViewer'
 import { TradeComposer, TradeProposal } from './TradeMenu'
 import { RULES } from './rules.config'
+import { SlotPanel } from './SlotPanel'
 import { Table21Panel } from './Table21Panel'
 import { TurnActionBar } from './TurnActionBar'
 import { subscribeHostActions } from '../../net/hostActions'
@@ -119,6 +120,10 @@ function phaseHint(state: CucupolyState): string {
     }
     case 'twenty-one':
       return 'Mesa de 21 en curso.'
+    case 'slots':
+      return state.slot
+        ? `Tragamonedas: ${nameOf(state, state.slot.playerId)} está jugando.`
+        : 'Tragamonedas.'
     case 'trade':
       return 'Trato pendiente.'
     case 'bus-move':
@@ -160,6 +165,9 @@ function mustAct(state: CucupolyState, meId: string): boolean {
       // La mesa del 21 se muestra siempre y gestiona sus propias acciones.
       return false
     }
+    case 'slots':
+      // La tragamonedas también se muestra siempre y gestiona sus botones.
+      return false
     case 'trade': {
       const trade = state.trade
       if (!trade) return false
@@ -178,6 +186,7 @@ function isTurnPhase(phase: CucupolyState['phase']): boolean {
     phase === 'buy-decision' ||
     phase === 'auction' ||
     phase === 'twenty-one' ||
+    phase === 'slots' ||
     phase === 'trade' ||
     phase === 'bus-move'
   )
@@ -206,6 +215,8 @@ function actionIcon(state: CucupolyState): string {
       return state.auction?.mode === 'open' ? '⚡' : '🔨'
     case 'twenty-one':
       return '🃏'
+    case 'slots':
+      return '🎰'
     case 'trade':
       return '🤝'
     case 'bus-move':
@@ -227,6 +238,8 @@ function actionTitle(state: CucupolyState, me: Player): string {
       return state.auction ? AUCTION_NAMES[state.auction.mode] : 'Subasta'
     case 'twenty-one':
       return 'Mesa de 21'
+    case 'slots':
+      return 'Tragamonedas'
     case 'trade':
       return 'Trato'
     case 'bus-move':
@@ -1342,6 +1355,16 @@ export function CucupolyView({
           dispatch={dispatch}
           privateData={privateData}
           sendPrivate={sendPrivate}
+        />
+      ) : null}
+
+      {state.phase === 'slots' && state.slot && !animating ? (
+        <SlotPanel
+          state={state}
+          slot={state.slot}
+          me={me}
+          players={players}
+          dispatch={dispatch}
         />
       ) : null}
 

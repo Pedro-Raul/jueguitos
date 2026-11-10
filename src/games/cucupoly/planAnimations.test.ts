@@ -37,6 +37,7 @@ function makeState(overrides: Overrides = {}): CucupolyState {
     pendingBus: null,
     auction: null,
     table21: null,
+    slot: null,
     trade: null,
     endTurnPending: false,
     endTurnTicks: 0,

@@ -41,6 +41,13 @@ import {
   requestDiceEvent,
 } from './eventScheduler'
 import { RULES } from './rules.config'
+import {
+  SLOT_BETS,
+  SLOT_MIN_BET,
+  SLOT_REEL,
+  slotPayout,
+  type SlotSymbolId,
+} from './slot'
 
 const ANA: Player = { id: 'p1', name: 'Ana', emoji: '🐙', color: '#e11d48', connected: true }
 const BETO: Player = { id: 'p2', name: 'Beto', emoji: '🦊', color: '#2563eb', connected: true }
@@ -2332,5 +2339,284 @@ describe('sorteo de orden de turnos', () => {
     ) as CucupolyState
     expect(state.phase).toBe('waiting-roll')
     expect(state.turnOrder[state.currentIndex]).toBe('p2')
+  })
+})
+
+/** Deja al jugador actual a punto de caer en el Sitio de apuestas (41). */
+function aimAtBetting(
+  state: CucupolyState,
+  playerId: string,
+  seed: number,
+): CucupolyState {
+  const { total } = rollOutcome(seed, getDiceCount(state))
+  state.seed = seed
+  state.phase = 'waiting-roll'
+  state.currentIndex = state.turnOrder.indexOf(playerId)
+  state.positions[playerId] = (41 - total + 48) % 48
+  return state
+}
+
+/** Estado ya dentro de la tragamonedas, sin pasar por los dados. */
+function slotState(seed = 7, playerId = 'p1'): CucupolyState {
+  const state = fresh(TWO, seed)
+  state.phase = 'slots'
+  state.currentIndex = state.turnOrder.indexOf(playerId)
+  state.slot = {
+    playerId,
+    stage: 'bet',
+    bet: 0,
+    reels: null,
+    payout: 0,
+    multiplier: 0,
+    spinSeq: 0,
+  }
+  return state
+}
+
+/** Reproduce los tres símbolos que el reducer sacará del seed. */
+function reelsForSeed(seed: number): SlotSymbolId[] {
+  let current = seed
+  const reels: SlotSymbolId[] = []
+  for (let index = 0; index < 3; index += 1) {
+    const next = nextSeed(current)
+    current = next.seed
+    reels.push(SLOT_REEL[Math.floor(next.value * SLOT_REEL.length)])
+  }
+  return reels
+}
+
+/** Seed cuyo giro con `bet` deja algún premio. */
+function winningSlotSeed(bet: number): number {
+  for (let seed = 1; seed < 10_000; seed += 1) {
+    const spun = reduce(
+      slotState(seed),
+      { type: 'spin-slot', payload: { bet } },
+      'p1',
+    ) as CucupolyState
+    if (slotPayout(reelsForSeed(spun.seed), bet).payout > 0) return seed
+  }
+  throw new Error('Sin seed ganadora para la tragamonedas')
+}
+
+describe('tragamonedas del Sitio de apuestas', () => {
+  it('se abre al caer en la casilla 41', () => {
+    const after = reduce(
+      aimAtBetting(fresh(), 'p1', 12345),
+      { type: 'roll' },
+      'p1',
+    ) as CucupolyState
+
+    expect(BOARD[41]).toMatchObject({ name: 'Sitio de apuestas', type: 'betting' })
+    expect(after.positions.p1).toBe(41)
+    expect(after.phase).toBe('slots')
+    expect(after.slot).toMatchObject({
+      playerId: 'p1',
+      stage: 'bet',
+      bet: 0,
+      reels: null,
+      payout: 0,
+      multiplier: 0,
+      spinSeq: 0,
+    })
+  })
+
+  it('sin el saldo mínimo no abre la máquina y cierra el turno', () => {
+    const state = aimAtBetting(fresh(), 'p1', 12345)
+    state.money.p1 = SLOT_MIN_BET - 1
+
+    const after = reduce(state, { type: 'roll' }, 'p1') as CucupolyState
+
+    expect(after.phase).toBe('waiting-roll')
+    expect(after.slot).toBeNull()
+    expect(after.endTurnPending).toBe(true)
+    expect(after.money.p1).toBe(SLOT_MIN_BET - 1)
+  })
+
+  it('cobra la apuesta al girar y rechaza apuestas fuera de la tabla', () => {
+    const state = slotState()
+    const before = state.money.p1
+
+    expect(
+      isGameError(reduce(state, { type: 'spin-slot', payload: { bet: 7 } }, 'p1')),
+    ).toBe(true)
+    expect(
+      isGameError(reduce(state, { type: 'spin-slot', payload: { bet: 0 } }, 'p1')),
+    ).toBe(true)
+    expect(
+      isGameError(reduce(state, { type: 'spin-slot' }, 'p1')),
+    ).toBe(true)
+
+    const spun = reduce(
+      state,
+      { type: 'spin-slot', payload: { bet: SLOT_BETS[0] } },
+      'p1',
+    ) as CucupolyState
+    expect(spun.money.p1).toBe(before - SLOT_BETS[0])
+    expect(spun.slot).toMatchObject({
+      stage: 'spinning',
+      bet: SLOT_BETS[0],
+      reels: null,
+      payout: 0,
+      spinSeq: 1,
+    })
+
+    // No se puede apostar dos veces mientras gira.
+    expect(
+      isGameError(reduce(spun, { type: 'spin-slot', payload: { bet: 10 } }, 'p1')),
+    ).toBe(true)
+  })
+
+  it('solo el jugador de la máquina puede girar', () => {
+    const state = slotState()
+    expect(
+      isGameError(reduce(state, { type: 'spin-slot', payload: { bet: 10 } }, 'p2')),
+    ).toBe(true)
+  })
+
+  it('rechaza una apuesta mayor que el saldo', () => {
+    const state = slotState()
+    state.money.p1 = SLOT_BETS[SLOT_BETS.length - 1] - 1
+    expect(
+      isGameError(
+        reduce(state, { type: 'spin-slot', payload: { bet: SLOT_BETS[SLOT_BETS.length - 1] } }, 'p1'),
+      ),
+    ).toBe(true)
+  })
+
+  it('resuelve con el RNG del estado, paga el premio y es determinista', () => {
+    const bet = 10
+    const seed = winningSlotSeed(bet)
+
+    const run = () => {
+      const spun = reduce(
+        slotState(seed),
+        { type: 'spin-slot', payload: { bet } },
+        'p1',
+      ) as CucupolyState
+      const expectedReels = reelsForSeed(spun.seed)
+      const expected = slotPayout(expectedReels, bet)
+      const settled = reduce(spun, { type: 'settle-slot' }, 'p1') as CucupolyState
+      return { spun, settled, expectedReels, expected }
+    }
+
+    const first = run()
+    expect(first.settled.slot).toMatchObject({
+      stage: 'result',
+      bet,
+      payout: first.expected.payout,
+      multiplier: first.expected.multiplier,
+    })
+    expect(first.settled.slot!.reels).toEqual(first.expectedReels)
+    expect(first.expected.payout).toBeGreaterThan(0)
+    expect(first.settled.money.p1).toBe(
+      RULES.startingMoney - bet + first.expected.payout,
+    )
+
+    const second = run()
+    expect(second.settled.slot).toEqual(first.settled.slot)
+    expect(second.settled.money).toEqual(first.settled.money)
+  })
+
+  it('solo el anfitrión resuelve el giro', () => {
+    const spun = reduce(
+      slotState(),
+      { type: 'spin-slot', payload: { bet: 10 } },
+      'p1',
+    ) as CucupolyState
+
+    expect(isGameError(reduce(spun, { type: 'settle-slot' }, 'p2'))).toBe(true)
+    expect(
+      isGameError(reduce(spun, { type: 'settle-slot' }, 'p1')),
+    ).toBe(false)
+  })
+
+  it('no deja salir mientras los rodillos giran', () => {
+    const spun = reduce(
+      slotState(),
+      { type: 'spin-slot', payload: { bet: 10 } },
+      'p1',
+    ) as CucupolyState
+
+    expect(isGameError(reduce(spun, { type: 'leave-slot' }, 'p1'))).toBe(true)
+    expect(isGameError(reduce(spun, { type: 'leave-slot' }, 'p2'))).toBe(true)
+  })
+
+  it('permite volver a girar tras un resultado y sube la secuencia', () => {
+    const seed = 12345
+    const spun = reduce(
+      slotState(seed),
+      { type: 'spin-slot', payload: { bet: 5 } },
+      'p1',
+    ) as CucupolyState
+    const settled = reduce(spun, { type: 'settle-slot' }, 'p1') as CucupolyState
+    const before = settled.money.p1
+
+    const again = reduce(
+      settled,
+      { type: 'spin-slot', payload: { bet: 25 } },
+      'p1',
+    ) as CucupolyState
+
+    expect(again.slot).toMatchObject({
+      stage: 'spinning',
+      bet: 25,
+      reels: null,
+      payout: 0,
+      multiplier: 0,
+      spinSeq: 2,
+    })
+    expect(again.money.p1).toBe(before - 25)
+  })
+
+  it('salir tras una tirada abre la ventana de fin de turno y limpia la máquina', () => {
+    const rolled = reduce(
+      aimAtBetting(fresh(), 'p1', 12345),
+      { type: 'roll' },
+      'p1',
+    ) as CucupolyState
+    expect(rolled.phase).toBe('slots')
+
+    const after = reduce(rolled, { type: 'leave-slot' }, 'p1') as CucupolyState
+
+    expect(after.slot).toBeNull()
+    expect(after.phase).toBe('waiting-roll')
+    expect(after.endTurnPending).toBe(true)
+    expect(after.turnOrder[after.currentIndex]).toBe('p1')
+  })
+
+  it('salir sin tirada pasa el turno directamente', () => {
+    const after = reduce(slotState(), { type: 'leave-slot' }, 'p1') as CucupolyState
+
+    expect(after.slot).toBeNull()
+    expect(after.phase).toBe('waiting-roll')
+    expect(after.endTurnPending).toBe(false)
+    expect(after.turnOrder[after.currentIndex]).toBe('p2')
+  })
+
+  it('el anfitrión puede cerrar la máquina de un invitado desconectado', () => {
+    const state = slotState(7, 'p2')
+    expect(state.turnOrder[state.currentIndex]).toBe('p2')
+
+    const after = reduce(state, { type: 'leave-slot' }, 'p1') as CucupolyState
+
+    expect(after.slot).toBeNull()
+    expect(after.turnOrder[after.currentIndex]).toBe('p1')
+  })
+
+  it('un tercero no puede cerrar la máquina', () => {
+    const state = slotState(7, 'p1')
+    state.order = [...state.order, 'p3']
+    state.names.p3 = 'Caro'
+
+    expect(isGameError(reduce(state, { type: 'leave-slot' }, 'p3'))).toBe(true)
+  })
+
+  it('las acciones de la máquina fallan fuera de la fase de tragamonedas', () => {
+    const state = fresh()
+    expect(
+      isGameError(reduce(state, { type: 'spin-slot', payload: { bet: 10 } }, 'p1')),
+    ).toBe(true)
+    expect(isGameError(reduce(state, { type: 'settle-slot' }, 'p1'))).toBe(true)
+    expect(isGameError(reduce(state, { type: 'leave-slot' }, 'p1'))).toBe(true)
   })
 })

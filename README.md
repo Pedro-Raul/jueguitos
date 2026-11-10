@@ -39,13 +39,16 @@ npm test          # tests con Vitest
 6. Juega unos turnos: **Tirar dados**, decidir compras, caer en Sorpresa (mesa de 21, 1 dado o 3
    dados) y en Tesorería. Comprueba que las dos pantallas muestran el mismo dinero y las mismas
    fichas.
-7. Con un servicio en propiedad, en tu turno despliega **Habilidades** en el panel de acciones y
+7. Cae en **Sitio de apuestas** (casilla 41, 🎰): elige una apuesta de $5 a $50, pulsa **Girar** y
+   mira cómo el anfitrión resuelve el giro. Tres iguales y las parejas pagan según la tabla; pulsa
+   **Irse** para cerrar el turno.
+8. Con un servicio en propiedad, en tu turno despliega **Habilidades** en el panel de acciones y
    pulsa **Activar**; revisa que el estado pase a «activa» y luego a «espera N r.».
-8. Con las 4 busetas, cae en una buseta y usa **Saltar** para moverte gratis a la siguiente.
-9. Tras tirar, el turno espera en una ventana de 30 s con botón **Continuar**. Dentro de esa
-   ventana pulsa **Intercambio** para proponer cartas y/o dinero: el receptor puede aceptar o
-   rechazar aunque no sea su turno y el anfitrión revalida el trato antes de aplicarlo.
-10. Para ver la bancarrota sin jugar una partida larga, deja que un jugador se quede sin dinero y
+9. Con las 4 busetas, cae en una buseta y usa **Saltar** para moverte gratis a la siguiente.
+10. Tras tirar, el turno espera en una ventana de 30 s con botón **Continuar**. Dentro de esa
+    ventana pulsa **Intercambio** para proponer cartas y/o dinero: el receptor puede aceptar o
+    rechazar aunque no sea su turno y el anfitrión revalida el trato antes de aplicarlo.
+11. Para ver la bancarrota sin jugar una partida larga, deja que un jugador se quede sin dinero y
     caiga en una casilla con renta o impuesto: queda eliminado, sus propiedades pasan al acreedor
     (o al banco) y gana el último jugador activo.
 

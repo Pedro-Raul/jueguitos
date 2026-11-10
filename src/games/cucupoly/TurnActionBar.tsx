@@ -8,6 +8,7 @@ const BLOCKING_PHASES: ReadonlySet<CucupolyState['phase']> = new Set([
   'buy-decision',
   'auction',
   'twenty-one',
+  'slots',
   'trade',
   'bus-move',
 ])

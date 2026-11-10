@@ -26,10 +26,22 @@ export function GuestRoomScreen({ code, me, onLeave }: Props) {
   if (!snapshot) {
     return (
       <main className="screen">
-        <section className="card">
+        <section className="card card-narrow connecting-card" aria-busy="true">
+          <span className="spinner" aria-hidden="true" />
           <h2>{status === 'reconnecting' ? 'Reconectando…' : 'Conectando…'}</h2>
-          <p className="muted">Sala {code}</p>
-          {message ? <p className="alert">{message}</p> : null}
+          <p className="muted">
+            Sala <strong>{code}</strong>
+          </p>
+          <p className="muted small">
+            {status === 'reconnecting'
+              ? 'Se perdió la conexión; lo intentamos de nuevo.'
+              : 'Esto puede tardar unos segundos.'}
+          </p>
+          {message ? (
+            <p className="alert" role="status">
+              {message}
+            </p>
+          ) : null}
           <div className="actions">
             <button className="ghost" type="button" onClick={onLeave}>
               Cancelar
